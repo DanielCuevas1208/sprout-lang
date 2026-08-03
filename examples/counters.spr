@@ -1,0 +1,27 @@
+// counters.spr - closures capture their environment.
+//
+// Run: sprout run examples/counters.spr
+
+fn make_counter() {
+    let count = 0
+    return fn() {
+        count = count + 1
+        return count
+    }
+}
+
+let a = make_counter()
+let b = make_counter()
+
+print(a())
+print(a())
+print(b())
+print(a())
+
+let fns = []
+for i in range(0, 3) {
+    push(fns, fn() {
+        return i
+    })
+}
+print(fns[0](), fns[1](), fns[2]())

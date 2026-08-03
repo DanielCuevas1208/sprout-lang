@@ -1,0 +1,25 @@
+// primes.spr - find the primes below 30.
+//
+// Run: sprout run examples/primes.spr
+
+fn is_prime(n) {
+    if n < 2 {
+        return false
+    }
+    let i = 2
+    while i * i <= n {
+        if n % i == 0 {
+            return false
+        }
+        i = i + 1
+    }
+    return true
+}
+
+let primes = []
+for n in range(2, 30) {
+    if is_prime(n) {
+        push(primes, n)
+    }
+}
+print("primes below 30:", primes)

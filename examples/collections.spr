@@ -1,0 +1,20 @@
+// collections.spr - lists and maps.
+//
+// Run: sprout run examples/collections.spr
+
+let fruit = ["apple", "banana", "cherry"]
+print("len:", len(fruit))
+print("first:", fruit[0])
+push(fruit, "date")
+print("with date:", fruit)
+pop(fruit)
+print("after pop:", fruit)
+print("has cherry:", has(fruit, 2))
+
+let scores = {"alice": 10, "bob": 20}
+print(scores["alice"])
+scores["carol"] = 30
+print(scores)
+print("keys:", keys(scores))
+print("values:", values(scores))
+print("has bob:", has(scores, "bob"))

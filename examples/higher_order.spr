@@ -1,0 +1,24 @@
+// higher_order.spr - anonymous functions and the standard library.
+//
+// Run: sprout run examples/higher_order.spr
+
+let numbers = [1, 2, 3, 4, 5]
+
+let doubled = map(numbers, fn(x) {
+    return x * 2
+})
+print("doubled:", doubled)
+
+let evens = filter(numbers, fn(x) {
+    return x % 2 == 0
+})
+print("evens:", evens)
+
+let total = fold(numbers, 0, fn(acc, x) {
+    return acc + x
+})
+print("total:", total)
+
+print("squares:", map(numbers, fn(x) {
+    return x ^ 2
+}))

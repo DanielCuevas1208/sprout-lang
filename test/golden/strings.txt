@@ -1,0 +1,10 @@
+Hello, Sprout!
+  hello, sprout!  
+HELLO, SPROUT!
+starts with Hello: true
+ends with !: true
+contains Sprout: true
+[a, b, c]
+a / b / c
+hahaha
+5

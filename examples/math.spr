@@ -1,0 +1,17 @@
+// math.spr - numbers, powers, and rounding.
+//
+// Run: sprout run examples/math.spr
+
+print("7 / 2 =", 7 / 2)
+print("7.0 / 2 =", 7.0 / 2)
+print("2 ^ 10 =", 2 ^ 10)
+print("-3 ^ 2 =", -3 ^ 2)
+print("sqrt(144) =", sqrt(144))
+print("abs(-5) =", abs(-5))
+print("min:", min(3, 1, 2))
+print("max:", max(3, 1, 2))
+print("floor(2.7) =", floor(2.7))
+print("ceil(2.1) =", ceil(2.1))
+print("round(2.5) =", round(2.5))
+print("1e3 =", 1e3)
+print("1_000_000 =", 1_000_000)

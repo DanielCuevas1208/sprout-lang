@@ -1,0 +1,10 @@
+// hello.spr - the classic greeting, with a sprout twist.
+//
+// Run: sprout run examples/hello.spr
+
+let name = "world"
+
+print("hello, " + name)
+print("sprout is", 1, "day old")
+print("upper:", upper("hello"))
+print("joined:", join("-", ["a", "b", "c"]))

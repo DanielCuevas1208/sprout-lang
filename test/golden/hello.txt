@@ -1,0 +1,4 @@
+hello, world
+sprout is 1 day old
+upper: HELLO
+joined: a-b-c

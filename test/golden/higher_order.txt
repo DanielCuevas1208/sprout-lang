@@ -1,0 +1,4 @@
+doubled: [2, 4, 6, 8, 10]
+evens: [2, 4]
+total: 15
+squares: [1, 4, 9, 16, 25]

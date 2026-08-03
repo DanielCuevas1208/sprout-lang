@@ -1,0 +1,26 @@
+// guess.spr - a number guessing game.
+//
+// Run: sprout run examples/guess.spr
+
+fn read_number(prompt) {
+    let line = input(prompt)
+    return int(line)
+}
+
+print("Guess a number between 1 and 20.")
+
+let secret = 7
+let guess = 0
+let tries = 0
+
+while guess != secret {
+    guess = read_number("Your guess: ")
+    tries = tries + 1
+    if guess < secret {
+        print("Too low.")
+    } elif guess > secret {
+        print("Too high.")
+    }
+}
+
+print("You got it in", tries, "tries.")

@@ -1,0 +1,10 @@
+len: 3
+first: apple
+with date: [apple, banana, cherry, date]
+after pop: [apple, banana, cherry]
+has cherry: true
+10
+{alice: 10, bob: 20, carol: 30}
+keys: [alice, bob, carol]
+values: [10, 20, 30]
+has bob: true

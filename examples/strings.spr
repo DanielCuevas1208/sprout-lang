@@ -1,0 +1,16 @@
+// strings.spr - the string library in action.
+//
+// Run: sprout run examples/strings.spr
+
+let greeting = "  Hello, Sprout!  "
+
+print(trim(greeting))
+print(lower(greeting))
+print(upper(trim(greeting)))
+print("starts with Hello:", starts_with(trim(greeting), "Hello"))
+print("ends with !:", ends_with(trim(greeting), "!"))
+print("contains Sprout:", contains(greeting, "Sprout"))
+print(split("a,b,c", ","))
+print(join(" / ", split("a,b,c", ",")))
+print(repeat("ha", 3))
+print(len("héllo"))

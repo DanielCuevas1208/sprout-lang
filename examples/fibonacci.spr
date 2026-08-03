@@ -1,0 +1,18 @@
+// fibonacci.spr - recursion with a call counter.
+//
+// Run: sprout run examples/fibonacci.spr
+
+let calls = 0
+
+fn fib(n) {
+    calls = calls + 1
+    if n < 2 {
+        return n
+    }
+    return fib(n - 1) + fib(n - 2)
+}
+
+for i in range(0, 11) {
+    print("fib(", i, ") =", fib(i))
+}
+print("total calls to compute fib(10):", calls)

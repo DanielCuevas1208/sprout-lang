@@ -1,0 +1,4 @@
+Guess a number between 1 and 20.
+Your guess: Too low.
+Your guess: Too high.
+Your guess: You got it in 3 tries.
