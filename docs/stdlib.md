@@ -1,6 +1,6 @@
 # Standard Library
 
-This page lists the built-in functions of Sprout 0.1.
+This page lists the built-in functions of Sprout 0.2.
 They are available in every program without an import.
 
 ## Output

@@ -225,8 +225,29 @@ sprout> x * 7
 sprout> :quit
 ```
 
+## Bytecode virtual machine
+
+Sprout 0.2 adds a stack-based bytecode virtual machine.
+It shares the parser, the checker, and the standard library with the
+interpreter. The two engines produce the same results.
+
+Run a program on the VM.
+
+```text
+sprout vm examples/fizzbuzz.spr
+```
+
+Show the compiled instructions of a program.
+
+```text
+sprout dis examples/hello.spr
+```
+
+Read `docs/bytecode.md` for the full VM reference.
+
 ## Next steps
 
 Read the standard library reference in `docs/stdlib.md`.
 Read the formal grammar in `docs/grammar.md`.
+Read the bytecode virtual machine in `docs/bytecode.md`.
 Run the example programs in the `examples` directory.

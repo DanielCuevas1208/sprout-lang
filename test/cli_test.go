@@ -57,7 +57,7 @@ func TestVersion(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("version exit code %d", code)
 	}
-	if !strings.Contains(out, "0.1.0") {
+	if !strings.Contains(out, "0.2.0") {
 		t.Errorf("version output: %q", out)
 	}
 }
@@ -69,6 +69,72 @@ func TestRunHello(t *testing.T) {
 	}
 	if !strings.Contains(out, "hello, world") {
 		t.Errorf("output: %q", out)
+	}
+}
+
+func TestRunVM(t *testing.T) {
+	out, _, code := runCLI(t, "", "vm", filepath.Join("..", "examples", "fizzbuzz.spr"))
+	if code != 0 {
+		t.Fatalf("vm exit code %d", code)
+	}
+	if !strings.Contains(out, "fizzbuzz") {
+		t.Errorf("output: %q", out)
+	}
+}
+
+func TestRunVMClosures(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "counter.spr")
+	src := "fn make_counter() {\n" +
+		"\tlet count = 0\n" +
+		"\treturn fn() {\n" +
+		"\t\tcount = count + 1\n" +
+		"\t\treturn count\n" +
+		"\t}\n" +
+		"}\n" +
+		"let next = make_counter()\n" +
+		"print(next(), next(), next())\n"
+	if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, _, code := runCLI(t, "", "vm", path)
+	if code != 0 {
+		t.Fatalf("vm exit code %d", code)
+	}
+	if !strings.Contains(out, "1 2 3") {
+		t.Errorf("output: %q", out)
+	}
+}
+
+func TestRunDis(t *testing.T) {
+	out, _, code := runCLI(t, "", "dis", filepath.Join("..", "examples", "hello.spr"))
+	if code != 0 {
+		t.Fatalf("dis exit code %d", code)
+	}
+	if !strings.Contains(out, "== fn <main> ==") {
+		t.Errorf("expected main function header, output: %q", out)
+	}
+	if !strings.Contains(out, "PUSH_CONST") {
+		t.Errorf("expected instructions, output: %q", out)
+	}
+}
+
+func TestRunVMErrorHasStack(t *testing.T) {
+	src := "fn inner() { return 1 / 0 }\ninner()\n"
+	dir := t.TempDir()
+	path := filepath.Join(dir, "boom.spr")
+	if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, errOut, code := runCLI(t, "", "vm", path)
+	if code == 0 {
+		t.Fatalf("vm should fail, exit code 0")
+	}
+	if !strings.Contains(errOut, "cannot divide by zero") {
+		t.Errorf("stderr: %q", errOut)
+	}
+	if !strings.Contains(errOut, "at inner") {
+		t.Errorf("expected stack frame, stderr: %q", errOut)
 	}
 }
 
