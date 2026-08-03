@@ -4,6 +4,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/sprout-lang/sprout/internal/object"
 	"github.com/sprout-lang/sprout/internal/parser"
 	"github.com/sprout-lang/sprout/internal/source"
 )
@@ -364,4 +365,83 @@ print([1, "a", true, nil, 2.5])
 print({"k": [1, 2]})
 print(range(0, 3))
 `, "[1, a, true, nil, 2.5]\n{k: [1, 2]}\nrange(0, 3)\n")
+}
+
+func TestRunModule(t *testing.T) {
+	io := &testIO{}
+	iv := NewWithIO(strings.NewReader(""), &io.out, &io.err)
+
+	file := source.NewFile("math.spr", "fn square(n) { return n * n }\nlet version = 1\n")
+	prog, diags := parser.Parse(file)
+	if len(diags) > 0 {
+		t.Fatalf("parse errors: %v", diags)
+	}
+	ns, rerr := iv.RunModule("math", file, prog, nil, []string{"square", "version"})
+	if rerr != nil {
+		t.Fatalf("run module: %s", rerr.Message)
+	}
+	if ns.Name != "math" {
+		t.Errorf("namespace name: %q", ns.Name)
+	}
+	if got := ns.Type().String(); got != "namespace" {
+		t.Errorf("namespace type: %q", got)
+	}
+
+	entryFile := source.NewFile("app.spr", `import "math"
+print(math.square(6))
+print(math.version)`)
+	entryProg, diags := parser.Parse(entryFile)
+	if len(diags) > 0 {
+		t.Fatalf("parse errors: %v", diags)
+	}
+	_, rerr = iv.ExecWithImports(entryFile, entryProg, map[string]*object.Namespace{"math": ns})
+	if rerr != nil {
+		t.Fatalf("run entry: %s", rerr.Message)
+	}
+	if io.out.String() != "36\n1\n" {
+		t.Errorf("output: %q", io.out.String())
+	}
+}
+
+func TestModuleMemberErrors(t *testing.T) {
+	expectError(t, `let x = 5
+print(x.foo)`, "cannot access a member of a int")
+
+	io := &testIO{}
+	iv := NewWithIO(strings.NewReader(""), &io.out, &io.err)
+	file := source.NewFile("math.spr", "fn square(n) { return n * n }\n")
+	prog, diags := parser.Parse(file)
+	if len(diags) > 0 {
+		t.Fatalf("parse errors: %v", diags)
+	}
+	ns, rerr := iv.RunModule("math", file, prog, nil, []string{"square"})
+	if rerr != nil {
+		t.Fatalf("run module: %s", rerr.Message)
+	}
+	entryFile := source.NewFile("app.spr", "import \"math\"\nprint(math.missing)\n")
+	entryProg, diags := parser.Parse(entryFile)
+	if len(diags) > 0 {
+		t.Fatalf("parse errors: %v", diags)
+	}
+	_, rerr = iv.ExecWithImports(entryFile, entryProg, map[string]*object.Namespace{"math": ns})
+	if rerr == nil || !strings.Contains(rerr.Message, "has no member 'missing'") {
+		t.Errorf("expected missing member error, got %v", rerr)
+	}
+}
+
+func TestImportOutsideProgram(t *testing.T) {
+	expectError(t, `import "math"`, "imports are only available in multi-file programs")
+}
+
+func TestRuntimeErrorCarriesFile(t *testing.T) {
+	_, rerr := run("fn f() { return 1 / 0 }\nf()\n", "")
+	if rerr == nil {
+		t.Fatal("expected a runtime error")
+	}
+	if rerr.File == nil || rerr.File.Name != "test.spr" {
+		t.Errorf("error file: %v", rerr.File)
+	}
+	if !rerr.Pos.IsValid() {
+		t.Errorf("error position: %+v", rerr.Pos)
+	}
 }

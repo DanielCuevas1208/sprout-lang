@@ -1,6 +1,6 @@
 # Sprout Grammar
 
-This document is the formal grammar of Sprout version 0.2.
+This document is the formal grammar of Sprout version 0.3.
 
 ## Notation
 
@@ -40,10 +40,21 @@ A floating-point literal needs a digit before the decimal point.
 ```
 program       := statement*
 statement     := let_decl | const_decl | fn_decl
+               | import_decl
                | if_stmt | while_stmt | for_stmt
                | return_stmt | break_stmt | continue_stmt
                | expr_stmt
 ```
+
+## Imports
+
+```
+import_decl   := "import" string ["as" identifier]
+```
+
+An import binds a module to a name.
+Without `as`, the name comes from the last path segment of the string.
+See `docs/modules.md` for resolution rules.
 
 ## Declarations
 
@@ -94,7 +105,7 @@ primary       := integer | float | string | "true" | "false" | "nil"
                | identifier | fn_expr
                | "(" expr ")"
                | list_lit | map_lit
-               | call | index
+               | call | index | member
 ```
 
 The unary minus binds looser than power. So `-3 ^ 2` means `-(3 ^ 2)`.
@@ -105,7 +116,11 @@ map_lit       := "{" [ map_entry {"," map_entry} [","] ] "}"
 map_entry     := expr ":" expr
 call          := primary "(" [ expr {"," expr} [","] ] ")"
 index         := primary "[" expr "]"
+member        := primary "." identifier
 ```
+
+A member access reads one export of a module.
+It binds as tightly as a call.
 
 ## Precedence table
 
@@ -120,7 +135,7 @@ index         := primary "[" expr "]"
 | 7     | `*` `/` `%` | left        |
 | 8     | `-` `not` (prefix) | right |
 | 9     | `^`       | right         |
-| 10    | call, index | left       |
+| 10    | call, index, member | left |
 
 ## Line continuation
 

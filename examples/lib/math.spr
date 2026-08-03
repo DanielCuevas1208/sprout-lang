@@ -1,0 +1,34 @@
+// A small library of number helpers.
+//
+// A module exports its top-level declarations. Another file imports this one
+// with: import "lib/math"
+//
+// Imported functions keep their own scope. They can hold state in closures.
+
+fn square(n) {
+	return n * n
+}
+
+fn cube(n) {
+	return n * n * n
+}
+
+fn is_even(n) {
+	return n % 2 == 0
+}
+
+fn greater(a, b) {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+// counter returns a function that counts from 0.
+fn counter() {
+	let count = 0
+	return fn() {
+		count = count + 1
+		return count
+	}
+}

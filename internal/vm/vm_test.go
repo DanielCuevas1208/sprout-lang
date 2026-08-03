@@ -1,12 +1,15 @@
 package vm
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/sprout-lang/sprout/internal/checker"
 	"github.com/sprout-lang/sprout/internal/compiler"
 	"github.com/sprout-lang/sprout/internal/diag"
+	"github.com/sprout-lang/sprout/internal/modules"
 	"github.com/sprout-lang/sprout/internal/parser"
 	"github.com/sprout-lang/sprout/internal/source"
 )
@@ -299,4 +302,122 @@ add_entry("one")
 add_entry("two")
 print(log)
 `, "[one, two]\n")
+}
+
+// loadGraph writes the given files to a temp directory and loads the graph
+// rooted at entryName.
+func loadGraph(t *testing.T, files map[string]string, entryName string) *modules.Graph {
+	t.Helper()
+	dir := t.TempDir()
+	for name, src := range files {
+		path := filepath.Join(dir, name)
+		if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	g, err := (&modules.Loader{}).Load(filepath.Join(dir, entryName))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return g
+}
+
+func TestVMModules(t *testing.T) {
+	g := loadGraph(t, map[string]string{
+		"math.spr": "fn square(n) { return n * n }\nlet version = \"0.1\"\n",
+		"app.spr":  "import \"math\" as m\nprint(m.square(7))\nprint(m.version)\n",
+	}, "app.spr")
+	if g.HasErrors() {
+		t.Fatalf("load errors: %v", g.Diags())
+	}
+	compiled, err := compiler.CompileGraph(g)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr strings.Builder
+	machine := NewWithIO(strings.NewReader(""), &stdout, &stderr)
+	_, rerr := machine.Run(g.Units[g.Entry].File, compiled)
+	if rerr != nil {
+		t.Fatalf("run: %s", rerr.Message)
+	}
+	if stdout.String() != "49\n0.1\n" {
+		t.Errorf("output: %q", stdout.String())
+	}
+}
+
+func TestVMModuleSharedState(t *testing.T) {
+	g := loadGraph(t, map[string]string{
+		"count.spr": `let n = 0
+fn next() {
+	n = n + 1
+	return n
+}`,
+		"app.spr": "import \"count\" as c\nprint(c.next(), c.next(), c.next())\n",
+	}, "app.spr")
+	if g.HasErrors() {
+		t.Fatalf("load errors: %v", g.Diags())
+	}
+	compiled, err := compiler.CompileGraph(g)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var stdout, stderr strings.Builder
+	machine := NewWithIO(strings.NewReader(""), &stdout, &stderr)
+	_, rerr := machine.Run(g.Units[g.Entry].File, compiled)
+	if rerr != nil {
+		t.Fatalf("run: %s", rerr.Message)
+	}
+	if stdout.String() != "1 2 3\n" {
+		t.Errorf("output: %q", stdout.String())
+	}
+}
+
+func TestVMModuleErrorPointsToModule(t *testing.T) {
+	g := loadGraph(t, map[string]string{
+		"boom.spr": "fn bad() { return 1 / 0 }\nbad()\n",
+		"app.spr":  "import \"boom\" as b\nprint(b.bad())\n",
+	}, "app.spr")
+	if g.HasErrors() {
+		t.Fatalf("load errors: %v", g.Diags())
+	}
+	compiled, err := compiler.CompileGraph(g)
+	if err != nil {
+		t.Fatal(err)
+	}
+	machine := NewWithIO(strings.NewReader(""), &strings.Builder{}, &strings.Builder{})
+	_, rerr := machine.Run(g.Units[g.Entry].File, compiled)
+	if rerr == nil {
+		t.Fatal("expected a runtime error")
+	}
+	if !strings.Contains(rerr.Message, "cannot divide by zero") {
+		t.Errorf("message: %q", rerr.Message)
+	}
+	// The error must point at the module file, not the entry.
+	entryName := g.Units[g.Entry].File.Name
+	if rerr.File == nil || rerr.File.Name == entryName || !strings.Contains(rerr.File.Name, "boom") {
+		t.Errorf("error file: %v (entry: %s)", rerr.File, entryName)
+	}
+}
+
+func TestVMMemberErrors(t *testing.T) {
+	expectError(t, "let x = 5\nprint(x.foo)\n", "cannot access a member of a int")
+	expectError(t, "print(print.foo)\n", "cannot access a member of a function")
+
+	// A missing member is caught statically, before the program runs.
+	g := loadGraph(t, map[string]string{
+		"math.spr": "fn square(n) { return n * n }\n",
+		"app.spr":  "import \"math\"\nprint(math.missing)\n",
+	}, "app.spr")
+	if !g.HasErrors() {
+		t.Fatalf("expected load errors, got none")
+	}
+	found := false
+	for _, d := range g.Diags() {
+		if strings.Contains(d.Message, "module 'math' has no member 'missing'") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("load errors: %v", g.Diags())
+	}
 }

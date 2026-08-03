@@ -57,7 +57,7 @@ func TestVersion(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("version exit code %d", code)
 	}
-	if !strings.Contains(out, "0.2.0") {
+	if !strings.Contains(out, "0.3.0") {
 		t.Errorf("version output: %q", out)
 	}
 }
@@ -233,5 +233,144 @@ func TestUnknownCommand(t *testing.T) {
 	}
 	if !strings.Contains(errOut, "unknown command") {
 		t.Errorf("stderr: %q", errOut)
+	}
+}
+
+func TestRunModuleExample(t *testing.T) {
+	out, _, code := runCLI(t, "", "run", filepath.Join("..", "examples", "modules.spr"))
+	if code != 0 {
+		t.Fatalf("run exit code %d", code)
+	}
+	if !strings.Contains(out, "6 squared is 36") || !strings.Contains(out, "sum of squares: 55") {
+		t.Errorf("output: %q", out)
+	}
+}
+
+func TestVMModuleExample(t *testing.T) {
+	out, _, code := runCLI(t, "", "vm", filepath.Join("..", "examples", "modules.spr"))
+	if code != 0 {
+		t.Fatalf("vm exit code %d", code)
+	}
+	if !strings.Contains(out, "counts: 1 2 3") {
+		t.Errorf("output: %q", out)
+	}
+}
+
+func TestBuildAndRunBundle(t *testing.T) {
+	dir := t.TempDir()
+	bundlePath := filepath.Join(dir, "modules.sprc")
+
+	out, errOut, code := runCLI(t, "", "build", "-o", bundlePath, filepath.Join("..", "examples", "modules.spr"))
+	if code != 0 {
+		t.Fatalf("build exit code %d (stderr: %s)", code, errOut)
+	}
+	if !strings.Contains(out, "2 modules") {
+		t.Errorf("build output: %q", out)
+	}
+	if _, err := os.Stat(bundlePath); err != nil {
+		t.Fatalf("bundle not written: %v", err)
+	}
+
+	out, errOut, code = runCLI(t, "", "vm", bundlePath)
+	if code != 0 {
+		t.Fatalf("vm bundle exit code %d (stderr: %s)", code, errOut)
+	}
+	if !strings.Contains(out, "6 squared is 36") {
+		t.Errorf("bundle output: %q", out)
+	}
+}
+
+func TestBuildDefaultOutput(t *testing.T) {
+	dir := t.TempDir()
+	entry := filepath.Join(dir, "prog.spr")
+	src := "print(2 + 2)\n"
+	if err := os.WriteFile(entry, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, errOut, code := runCLI(t, "", "build", entry)
+	if code != 0 {
+		t.Fatalf("build exit code %d (stderr: %s)", code, errOut)
+	}
+	if !strings.Contains(out, "prog.sprc") {
+		t.Errorf("build output: %q", out)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "prog.sprc")); err != nil {
+		t.Fatalf("default bundle missing: %v", err)
+	}
+}
+
+func TestCheckMissingModule(t *testing.T) {
+	dir := t.TempDir()
+	entry := filepath.Join(dir, "bad.spr")
+	src := "import \"nowhere\"\nprint(1)\n"
+	if err := os.WriteFile(entry, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, errOut, code := runCLI(t, "", "check", entry)
+	if code == 0 {
+		t.Fatalf("check should fail for a missing module")
+	}
+	if !strings.Contains(errOut, "cannot find module") {
+		t.Errorf("stderr: %q", errOut)
+	}
+}
+
+func TestCheckImportCycle(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, src string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("a.spr", "import \"b\"\n")
+	write("b.spr", "import \"a\"\n")
+	_, errOut, code := runCLI(t, "", "check", filepath.Join(dir, "a.spr"))
+	if code == 0 {
+		t.Fatalf("check should fail for an import cycle")
+	}
+	if !strings.Contains(errOut, "import cycle") {
+		t.Errorf("stderr: %q", errOut)
+	}
+}
+
+func TestCheckUnknownMember(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, src string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("math.spr", "fn square(n) { return n * n }\n")
+	write("app.spr", "import \"math\"\nprint(math.nope)\n")
+	_, errOut, code := runCLI(t, "", "check", filepath.Join(dir, "app.spr"))
+	if code == 0 {
+		t.Fatalf("check should fail for an unknown member")
+	}
+	if !strings.Contains(errOut, "has no member 'nope'") {
+		t.Errorf("stderr: %q", errOut)
+	}
+}
+
+func TestDisModules(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name, src string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("math.spr", "fn square(n) { return n * n }\n")
+	write("app.spr", "import \"math\"\nprint(math.square(2))\n")
+	out, errOut, code := runCLI(t, "", "dis", filepath.Join(dir, "app.spr"))
+	if code != 0 {
+		t.Fatalf("dis exit code %d (stderr: %s)", code, errOut)
+	}
+	if !strings.Contains(out, "== module math ==") {
+		t.Errorf("expected module header, output: %q", out)
+	}
+	if !strings.Contains(out, "PUSH_MODULE") || !strings.Contains(out, "GET_MEMBER") {
+		t.Errorf("expected module opcodes, output: %q", out)
 	}
 }

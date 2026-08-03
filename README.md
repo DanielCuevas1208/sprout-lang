@@ -2,7 +2,7 @@
 
 Sprout is a small programming language that runs on Go.
 It ships with a lexer, a Pratt parser, and two execution engines.
-Version 0.2 adds a stack-based bytecode virtual machine.
+Version 0.3 adds a module system and a build tool.
 The interpreter and the VM share one runtime and one standard library.
 Sprout produces friendly diagnostics that point at the exact problem.
 
@@ -16,6 +16,8 @@ The codebase is structured to grow cleanly over time.
 - A bytecode compiler and a stack-based virtual machine.
 - A tree-walking interpreter that shares the runtime with the VM.
 - A disassembler for the compiled instruction stream.
+- A module system that spans a program across files.
+- A build tool that writes one portable bytecode bundle.
 - Source diagnostics with a gutter, line, and caret.
 - A small standard library for real example programs.
 - A REPL for interactive experiments.
@@ -78,16 +80,20 @@ Run the tour in `docs/tour.md` for a full walkthrough.
 |---------|---------|
 | `sprout run file.spr` | Runs a program on the interpreter. |
 | `sprout vm file.spr` | Runs a program on the bytecode VM. |
+| `sprout build file.spr` | Writes a bytecode bundle. |
 | `sprout dis file.spr` | Shows the compiled bytecode. |
+| `sprout check file.spr` | Checks a program without running it. |
 | `sprout repl` | Starts a session. |
 | `sprout lex file.spr` | Shows the tokens. |
 | `sprout parse file.spr` | Shows the syntax tree. |
-| `sprout check file.spr` | Checks without running. |
 | `sprout version` | Shows the version. |
 
 Pass a file path with no command to run it.
 Run `sprout help` to see the full usage.
 Add `-color always` to force colored diagnostics.
+
+`run` and `vm` also run `.sprc` bundles.
+`build` writes a bundle with the `-o` option.
 
 ## Diagnostics
 
@@ -117,6 +123,7 @@ error: cannot divide by zero
 The checker finds problems before the program runs.
 It reports undefined names, bad constants, and misplaced control flow.
 Both engines report runtime errors in this format.
+An error inside a module points at that module's file.
 
 ## Language at a glance
 
@@ -142,9 +149,60 @@ Only `nil` and `false` are falsy.
 An expression ends at a newline unless it is inside brackets.
 See `docs/grammar.md` for the formal grammar.
 
+## Modules
+
+A program can span several files.
+The `import` statement loads a module and binds it to a name.
+
+```sprout
+import "lib/math" as m
+print(m.square(6))   // 36
+```
+
+A module exports its top-level declarations.
+Read an export with a dot.
+
+```sprout
+let nums = [1, 2, 3, 4, 5]
+print(stats.mean(nums))      // 3.0
+print(stats.sum_of_squares(nums))   // 55
+```
+
+The loader resolves modules against the entry directory.
+Set `SPROUT_PATH` to add search directories.
+Import cycles and missing modules are compile errors.
+
+The `examples/modules.spr` program imports two libraries.
+Run it on either engine.
+
+```text
+sprout run examples/modules.spr
+sprout vm examples/modules.spr
+```
+
+See `docs/modules.md` for the full reference.
+
+## Build tool
+
+The `build` command compiles a whole module graph to a bundle.
+
+```text
+sprout build app.spr
+```
+
+The bundle is one file with every module.
+It embeds the source text for diagnostics.
+Run the bundle on the VM.
+
+```text
+sprout vm app.sprc
+```
+
+A bundle is deterministic.
+The same program always produces the same bytes.
+
 ## Bytecode virtual machine
 
-Version 0.2 adds a compiler and a stack-based virtual machine.
 The compiler turns a syntax tree into bytecode.
 The VM executes that bytecode with an operand stack and call frames.
 Both engines share the runtime, so they behave identically.
@@ -197,6 +255,9 @@ The `examples` directory holds documented programs.
 - `math.spr` shows numbers and rounding.
 - `higher_order.spr` uses map, filter, and fold.
 - `guess.spr` is an interactive game.
+- `modules.spr` imports two libraries.
+- `lib/math.spr` is a reusable number library.
+- `lib/stats.spr` is a reusable statistics library.
 
 Each example has a golden output in `test/golden`.
 Both engines must match the goldens.
@@ -213,11 +274,14 @@ internal/lexer   the scanner
 internal/ast     the syntax tree
 internal/parser  the Pratt parser
 internal/checker static analysis
+internal/modules module loader and dependency graph
 internal/runtime value semantics and the standard library
 internal/interp  the tree-walking interpreter
 internal/code    opcodes and the instruction stream
 internal/compiler  bytecode compiler
 internal/vm      stack-based virtual machine
+internal/runner  the end-to-end pipeline driver
+internal/bundle  bytecode serialization
 internal/diag    diagnostics and rendering
 internal/repl    the interactive session
 ```
@@ -225,6 +289,7 @@ internal/repl    the interactive session
 Each stage is independent.
 The parser feeds the checker and the compiler.
 The runtime is the single source of truth for both engines.
+The runner loads a module graph, then drives either engine.
 Adding a feature means updating the runtime, then both engines stay in step.
 
 ## Development
@@ -260,13 +325,16 @@ All tests pass on Go 1.22 and newer.
 | Suite | Scope |
 |-------|-------|
 | `internal/lexer` | Tokens, positions, and lexer errors. |
-| `internal/parser` | Precedence, statements, and recovery. |
-| `internal/checker` | Scope and static errors. |
+| `internal/parser` | Precedence, statements, imports, and recovery. |
+| `internal/checker` | Scope, imports, members, and static errors. |
+| `internal/modules` | Resolution, cycles, and shared modules. |
 | `internal/runtime` | Arithmetic, comparison, and indexing. |
-| `internal/interp` | Evaluation, closures, and runtime errors. |
+| `internal/interp` | Evaluation, closures, modules, and runtime errors. |
 | `internal/code` | Opcodes, the builder, and disassembly. |
-| `internal/compiler` | Bytecode for expressions and control flow. |
-| `internal/vm` | Execution, closures, and runtime errors. |
+| `internal/compiler` | Bytecode for expressions, control flow, and modules. |
+| `internal/vm` | Execution, closures, modules, and runtime errors. |
+| `internal/runner` | Engine parity on multi-file programs. |
+| `internal/bundle` | Bytecode round trips and determinism. |
 | `internal/diag` | Diagnostic rendering. |
 | `test` | Example goldens, engine parity, and command line. |
 
@@ -276,10 +344,9 @@ Tests use only the standard library. They need no network or secrets.
 
 ## Roadmap
 
-Version 0.2 is complete. It adds the bytecode virtual machine.
+Version 0.3 is complete. It adds the module system and the build tool.
 It keeps the same parser and checker.
 
-Version 0.3 adds a module system and a build tool.
 Version 0.4 adds structs, methods, and interfaces.
 Version 0.5 adds result types and pattern matching.
 Version 0.6 adds concurrency with channels.
@@ -294,6 +361,8 @@ Version 0.6 adds concurrency with channels.
 - The standard library is small by design.
 - The VM materializes a loop iterable before the loop starts.
 - `break` and `continue` inside a closure are not supported.
+- A module exports only its top-level names.
+- The build tool does not link a native binary.
 
 ## License
 

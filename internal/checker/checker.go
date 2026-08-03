@@ -22,6 +22,7 @@ const (
 	symConst
 	symFunc
 	symParam
+	symModule
 )
 
 type symbol struct {
@@ -41,7 +42,20 @@ func newScope(parent *scope) *scope {
 
 // Check reports the diagnostics found in prog.
 func Check(file *source.File, prog *ast.Program) []diag.Diagnostic {
-	c := &checker{file: file}
+	return check(file, prog, nil)
+}
+
+// CheckModules reports the diagnostics found in prog.
+//
+// imports maps each import alias to the exported names of its module. When a
+// name is absent from the map, the checker cannot verify member access and
+// leaves it to the runtime.
+func CheckModules(file *source.File, prog *ast.Program, imports map[string][]string) []diag.Diagnostic {
+	return check(file, prog, imports)
+}
+
+func check(file *source.File, prog *ast.Program, imports map[string][]string) []diag.Diagnostic {
+	c := &checker{file: file, modules: imports}
 	c.checkStmts(prog.Stmts, newScope(nil))
 	return c.diags
 }
@@ -51,6 +65,8 @@ type checker struct {
 	diags     []diag.Diagnostic
 	funcDepth int
 	loopDepth int
+	// modules maps an import alias to the exported names of its module.
+	modules map[string][]string
 }
 
 // builtinNames is the set of predeclared functions.
@@ -86,6 +102,8 @@ func (c *checker) declare(sc *scope, name string, kind symKind, pos source.Pos, 
 
 func (c *checker) checkStmt(s ast.Stmt, sc *scope) {
 	switch n := s.(type) {
+	case *ast.ImportStmt:
+		c.declare(sc, n.Alias.Name, symModule, n.KwPos, "")
 	case *ast.LetStmt:
 		c.checkLet(n, sc)
 	case *ast.FnStmt:
@@ -255,6 +273,15 @@ func (c *checker) checkExpr(e ast.Expr, sc *scope) {
 	case *ast.IndexExpr:
 		c.checkExpr(n.X, sc)
 		c.checkExpr(n.Index, sc)
+	case *ast.MemberExpr:
+		c.checkExpr(n.X, sc)
+		if id, ok := n.X.(*ast.Ident); ok {
+			if sym, found := c.lookup(sc, id.Name); found && sym.kind == symModule {
+				if exports := c.modules[id.Name]; exports != nil && !contains(exports, n.Name.Name) {
+					c.errorf(n.Name.Position, "module '%s' has no member '%s'", id.Name, n.Name.Name)
+				}
+			}
+		}
 	case *ast.UnaryExpr:
 		c.checkExpr(n.X, sc)
 	case *ast.BinaryExpr:
@@ -301,4 +328,13 @@ func (c *checker) errorf(pos source.Pos, format string, args ...any) {
 		File:     c.file,
 		Pos:      pos,
 	})
+}
+
+func contains(list []string, name string) bool {
+	for _, s := range list {
+		if s == name {
+			return true
+		}
+	}
+	return false
 }

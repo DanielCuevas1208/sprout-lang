@@ -50,6 +50,7 @@ var precedences = map[token.Kind]int{
 	token.CARET:    precPower,
 	token.LPAREN:   precCall,
 	token.LBRACKET: precCall,
+	token.DOT:      precCall,
 }
 
 // Parser turns tokens into an AST.
@@ -100,6 +101,8 @@ func (p *Parser) parseStatement() ast.Stmt {
 		return p.parseLet(false)
 	case token.CONST:
 		return p.parseLet(true)
+	case token.IMPORT:
+		return p.parseImport()
 	case token.FN:
 		if p.peek(1).Kind == token.IDENT {
 			return p.parseFnDecl()
@@ -124,6 +127,63 @@ func (p *Parser) parseStatement() ast.Stmt {
 		return nil
 	}
 	return p.parseExprStmt()
+}
+
+// parseImport parses "import" string ["as" identifier].
+func (p *Parser) parseImport() ast.Stmt {
+	kw := p.next() // import
+
+	if !p.at(token.STRING) {
+		p.errorf(p.cur().Pos, "expected a module path string after 'import', found %s", tokenString(p.cur()))
+		p.recoverStatement()
+		return nil
+	}
+	pathTok := p.next()
+	spec := pathTok.Value
+
+	var alias *ast.Ident
+	if p.at(token.AS) {
+		p.next()
+		alias = p.expectIdent("an alias name after 'as'")
+		if alias == nil {
+			return nil
+		}
+	} else {
+		name := defaultAlias(spec)
+		if !validIdent(name) {
+			p.errorf(pathTok.Pos, "cannot use %q as a module name, use 'as' to name it", spec)
+			p.recoverStatement()
+			return nil
+		}
+		alias = &ast.Ident{Name: name, Position: pathTok.Pos}
+	}
+
+	return &ast.ImportStmt{KwPos: kw.Pos, Path: spec, PathPos: pathTok.Pos, Alias: alias}
+}
+
+// defaultAlias derives a binding name from a module specifier.
+func defaultAlias(spec string) string {
+	s := strings.ReplaceAll(spec, "\\", "/")
+	s = strings.TrimSuffix(s, "/")
+	if i := strings.LastIndexByte(s, '/'); i >= 0 {
+		s = s[i+1:]
+	}
+	return s
+}
+
+// validIdent reports whether s is a usable identifier and not a keyword.
+func validIdent(s string) bool {
+	if s == "" || token.Lookup(s) != token.IDENT {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		ok := c == '_' || (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (i > 0 && c >= '0' && c <= '9')
+		if !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func (p *Parser) parseLet(isConst bool) ast.Stmt {
@@ -326,6 +386,15 @@ func (p *Parser) parseExpression(prec int) ast.Expr {
 			if left == nil {
 				return nil
 			}
+		case token.DOT:
+			dot := p.next().Pos
+			if !p.at(token.IDENT) {
+				p.errorf(p.cur().Pos, "expected a member name after '.', found %s", tokenString(p.cur()))
+				p.recoverStatement()
+				return nil
+			}
+			name := p.next()
+			left = &ast.MemberExpr{X: left, Dot: dot, Name: &ast.Ident{Name: name.Lexeme, Position: name.Pos}}
 		default:
 			op := p.next()
 			p.skipNewlines()
@@ -764,6 +833,8 @@ func assignTargetDesc(e ast.Expr) string {
 		return "a name"
 	case *ast.IndexExpr:
 		return "an index"
+	case *ast.MemberExpr:
+		return "a module member"
 	case *ast.CallExpr:
 		return "a call result"
 	}

@@ -14,7 +14,7 @@ Save the code as `hello.spr`. Run it with `sprout run hello.spr`.
 
 ## Values and types
 
-Sprout has nine value types.
+Sprout has ten value types.
 
 - `int` holds a 64-bit integer.
 - `float` holds a 64-bit number.
@@ -25,6 +25,7 @@ Sprout has nine value types.
 - `map` holds keys and values. Keys are strings.
 - `function` is a callable value.
 - `range` is a sequence of integers.
+- `namespace` is an imported module.
 
 Use the `type` function to ask for the type of a value.
 
@@ -225,9 +226,25 @@ sprout> x * 7
 sprout> :quit
 ```
 
+## Modules
+
+A program can span several files.
+The `import` statement loads a module and binds it to a name.
+
+```sprout
+import "lib/math" as m
+print(m.square(5))   // 25
+```
+
+A module exports its top-level declarations.
+Use `as` to rename a module.
+Run the interpreter with `sprout run app.spr`.
+Run the VM with `sprout vm app.spr`.
+Read `docs/modules.md` for the full reference.
+
 ## Bytecode virtual machine
 
-Sprout 0.2 adds a stack-based bytecode virtual machine.
+Sprout 0.3 adds a stack-based bytecode virtual machine.
 It shares the parser, the checker, and the standard library with the
 interpreter. The two engines produce the same results.
 
@@ -250,4 +267,5 @@ Read `docs/bytecode.md` for the full VM reference.
 Read the standard library reference in `docs/stdlib.md`.
 Read the formal grammar in `docs/grammar.md`.
 Read the bytecode virtual machine in `docs/bytecode.md`.
+Read the module system in `docs/modules.md`.
 Run the example programs in the `examples` directory.

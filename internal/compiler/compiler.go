@@ -12,9 +12,11 @@ package compiler
 
 import (
 	"fmt"
+	"path/filepath"
 
 	"github.com/sprout-lang/sprout/internal/ast"
 	"github.com/sprout-lang/sprout/internal/code"
+	"github.com/sprout-lang/sprout/internal/modules"
 	"github.com/sprout-lang/sprout/internal/object"
 	"github.com/sprout-lang/sprout/internal/runtime"
 	"github.com/sprout-lang/sprout/internal/source"
@@ -26,8 +28,9 @@ const maxCallArgs = 255
 
 // symbol is one declared name in a scope.
 type symbol struct {
-	slot    int
-	isConst bool
+	slot     int
+	isConst  bool
+	isImport bool
 }
 
 // scope is one lexical scope. It mirrors one runtime environment.
@@ -63,6 +66,11 @@ type fnState struct {
 // Compiler turns a program into bytecode.
 type Compiler struct {
 	file *source.File
+	// fileIdx is the index of file in the program's file list.
+	fileIdx int
+	// imports maps an import specifier to its module index for the unit
+	// currently being compiled.
+	imports map[string]int
 	// fns is the stack of functions being compiled. The top is current.
 	fns []fnState
 	// loops is the stack of enclosing loops in the current function.
@@ -87,7 +95,91 @@ func Compile(file *source.File, prog *ast.Program) (p *code.Program, err error) 
 	c.compileStmts(prog.Stmts)
 	c.b().Add(code.OpReturn, endPos(prog.Stmts))
 	main := c.finishFn()
-	return &code.Program{Main: main}, nil
+	return &code.Program{Main: main, Files: []*source.File{file}}, nil
+}
+
+// CompileGraph translates a module graph into a runnable program.
+//
+// Each module becomes an initializer function in Program.Modules, in
+// dependency order. The entry unit becomes the main function. Import
+// statements inside a unit compile to a PUSH_MODULE of the referenced
+// module's index followed by a SET_LOCAL of the alias.
+func CompileGraph(g *modules.Graph) (p *code.Program, err error) {
+	c := &Compiler{builtins: builtinIndex()}
+	defer func() {
+		if r := recover(); r != nil {
+			if ce, ok := r.(*compileError); ok {
+				p, err = nil, ce
+				return
+			}
+			panic(r)
+		}
+	}()
+
+	prog := &code.Program{Files: make([]*source.File, len(g.Units))}
+	for i, u := range g.Units {
+		prog.Files[i] = u.File
+	}
+
+	for i, u := range g.Units {
+		if i == g.Entry {
+			continue
+		}
+		c.file = u.File
+		c.fileIdx = i
+		c.imports = importIndex(g, i)
+
+		sc := newScope(nil)
+		c.pushFn(code.NewBuilder("module:"+filepath.Base(u.Path), u.File.Name, nil), sc)
+		c.compileStmts(u.Prog.Stmts)
+		c.b().Add(code.OpReturn, endPos(u.Prog.Stmts))
+		fn := c.finishFn()
+		prog.Modules = append(prog.Modules, &code.Module{
+			Path:    u.Path,
+			Exports: moduleExports(sc, fn.NumSlots),
+			Init:    fn,
+		})
+		c.popFn()
+	}
+
+	entry := g.Units[g.Entry]
+	c.file = entry.File
+	c.fileIdx = g.Entry
+	c.imports = importIndex(g, g.Entry)
+
+	c.pushFn(code.NewBuilder("<main>", entry.File.Name, nil), newScope(nil))
+	c.compileStmts(entry.Prog.Stmts)
+	c.b().Add(code.OpReturn, endPos(entry.Prog.Stmts))
+	prog.Main = c.finishFn()
+	return prog, nil
+}
+
+// importIndex maps each import specifier of unit i to its module index.
+//
+// Module indexes equal unit indexes because every import target precedes the
+// entry unit, and the entry unit is not a module.
+func importIndex(g *modules.Graph, i int) map[string]int {
+	idx := make(map[string]int)
+	for _, imp := range g.Units[i].Imports {
+		if imp.Target >= 0 {
+			idx[imp.Spec] = imp.Target
+		}
+	}
+	return idx
+}
+
+// moduleExports lists the exported name of each init environment slot.
+//
+// An empty name marks an import alias, which stays private to the module.
+func moduleExports(sc *scope, slots int) []string {
+	exports := make([]string, slots)
+	for name, sym := range sc.names {
+		if sym.isImport {
+			continue
+		}
+		exports[sym.slot] = name
+	}
+	return exports
 }
 
 // compileError is the panic signal for internal compiler failures.
@@ -134,7 +226,9 @@ func (c *Compiler) popFn() { c.fns = c.fns[:len(c.fns)-1] }
 func (c *Compiler) finishFn() *code.Function {
 	st := &c.fns[len(c.fns)-1]
 	st.b.SetNumSlots(st.cur.nextSlot)
-	return st.b.Finish()
+	fn := st.b.Finish()
+	fn.FileIdx = c.fileIdx
+	return fn
 }
 
 // enterFn compiles a function body and returns its constant index.
@@ -169,6 +263,19 @@ func (c *Compiler) declare(name string, isConst bool, pos source.Pos) {
 		c.failf(pos, "duplicate declaration of '%s'", name)
 	}
 	sc.names[name] = &symbol{slot: sc.nextSlot, isConst: isConst}
+	sc.nextSlot++
+}
+
+// declareImport binds an import alias to the next slot.
+//
+// The alias occupies a slot so module members can resolve, but it is not an
+// export of the module.
+func (c *Compiler) declareImport(name string, pos source.Pos) {
+	sc := c.cur()
+	if _, dup := sc.names[name]; dup {
+		c.failf(pos, "duplicate declaration of '%s'", name)
+	}
+	sc.names[name] = &symbol{slot: sc.nextSlot, isImport: true}
 	sc.nextSlot++
 }
 
@@ -228,6 +335,15 @@ func (c *Compiler) compileStmts(stmts []ast.Stmt) {
 
 func (c *Compiler) compileStmt(s ast.Stmt) {
 	switch n := s.(type) {
+	case *ast.ImportStmt:
+		idx, ok := c.imports[n.Path]
+		if !ok {
+			c.failf(n.KwPos, "cannot resolve import %q", n.Path)
+		}
+		c.declareImport(n.Alias.Name, n.KwPos)
+		c.b().AddU16(code.OpPushModule, uint16(idx), n.KwPos)
+		c.emitSet(n.Alias.Name, n.KwPos)
+
 	case *ast.LetStmt:
 		c.declare(n.Name.Name, n.IsConst, n.Name.Position)
 		if n.Value != nil {
@@ -453,6 +569,11 @@ func (c *Compiler) compileExpr(e ast.Expr) {
 		c.compileExpr(n.X)
 		c.compileExpr(n.Index)
 		c.b().Add(code.OpGetIndex, n.Lbracket)
+
+	case *ast.MemberExpr:
+		c.compileExpr(n.X)
+		idx := c.b().Const(object.Str{Value: n.Name.Name})
+		c.b().AddU16(code.OpGetMember, idx, n.Dot)
 
 	case *ast.FnExpr:
 		idx := c.enterFn("", n.Params, n.Body)

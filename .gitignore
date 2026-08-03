@@ -4,6 +4,7 @@
 *.exe
 *.test
 *.out
+*.sprc
 
 # Editor and OS files
 .vscode/

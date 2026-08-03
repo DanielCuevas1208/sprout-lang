@@ -1,11 +1,14 @@
 package compiler
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/sprout-lang/sprout/internal/code"
 	"github.com/sprout-lang/sprout/internal/diag"
+	"github.com/sprout-lang/sprout/internal/modules"
 	"github.com/sprout-lang/sprout/internal/parser"
 	"github.com/sprout-lang/sprout/internal/source"
 )
@@ -47,7 +50,8 @@ func nextOffset(b []byte, ip int) int {
 		return ip + 2
 	case code.OpPushConst, code.OpNewEnv, code.OpGetLocal, code.OpSetLocal,
 		code.OpBuiltin, code.OpClosure, code.OpJump, code.OpJumpIfFalse,
-		code.OpJumpIfTrue, code.OpBuildList, code.OpBuildMap, code.OpIterNext:
+		code.OpJumpIfTrue, code.OpBuildList, code.OpBuildMap, code.OpIterNext,
+		code.OpPushModule, code.OpGetMember:
 		return ip + 3
 	default:
 		return ip + 1
@@ -330,5 +334,70 @@ func TestCompileASTPositionsTracked(t *testing.T) {
 			t.Errorf("missing position for instruction at offset %d", ip)
 		}
 		ip = nextOffset(main.Code, ip)
+	}
+}
+
+func TestCompileGraph(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "math.spr"), "fn square(n) { return n * n }\nlet name = \"math\"\n")
+	writeFile(t, filepath.Join(dir, "stats.spr"),
+		"import \"math\" as m\nfn total(xs) { return fold(xs, 0, fn(acc, x) { return acc + x }) }\n")
+	writeFile(t, filepath.Join(dir, "main.spr"),
+		"import \"math\"\nimport \"stats\" as stats\nprint(math.square(4))\nprint(stats.total([1, 2]))\n")
+
+	g, err := (&modules.Loader{}).Load(filepath.Join(dir, "main.spr"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g.HasErrors() {
+		t.Fatalf("load errors: %v", g.Diags())
+	}
+
+	prog, err := CompileGraph(g)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(prog.Modules) != 2 {
+		t.Fatalf("module count: %d", len(prog.Modules))
+	}
+	if len(prog.Files) != 3 {
+		t.Fatalf("file count: %d", len(prog.Files))
+	}
+
+	// math exports square and name, in slot order.
+	math := prog.Modules[0]
+	if got := strings.Join(math.Exports, ","); got != "square,name" {
+		t.Errorf("math exports: %q", got)
+	}
+	// stats imports math, so its alias slot stays private (empty name).
+	stats := prog.Modules[1]
+	if len(stats.Exports) != 2 || stats.Exports[0] != "total" || stats.Exports[1] != "" {
+		t.Errorf("stats exports: %q", stats.Exports)
+	}
+
+	main := prog.Main
+	if got := opCount(t, main, code.OpPushModule); got != 2 {
+		t.Errorf("push module count: %d", got)
+	}
+	if got := opCount(t, main, code.OpGetMember); got != 2 {
+		t.Errorf("get member count: %d", got)
+	}
+	// The stats module reads its math import through an upvalue chain.
+	if got := opCount(t, stats.Init, code.OpPushModule); got != 1 {
+		t.Errorf("push module count in stats init: %d", got)
+	}
+	// Every function carries the index of its own file.
+	if main.FileIdx != 2 {
+		t.Errorf("main file index: %d", main.FileIdx)
+	}
+	if stats.Init.FileIdx != 1 {
+		t.Errorf("stats file index: %d", stats.Init.FileIdx)
+	}
+}
+
+func writeFile(t *testing.T, path, src string) {
+	t.Helper()
+	if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
 	}
 }

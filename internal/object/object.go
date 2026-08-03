@@ -11,15 +11,16 @@ import (
 type Type string
 
 const (
-	TypeInt      Type = "int"
-	TypeFloat    Type = "float"
-	TypeString   Type = "string"
-	TypeBool     Type = "bool"
-	TypeNil      Type = "nil"
-	TypeList     Type = "list"
-	TypeMap      Type = "map"
-	TypeFunction Type = "function"
-	TypeRange    Type = "range"
+	TypeInt       Type = "int"
+	TypeFloat     Type = "float"
+	TypeString    Type = "string"
+	TypeBool      Type = "bool"
+	TypeNil       Type = "nil"
+	TypeList      Type = "list"
+	TypeMap       Type = "map"
+	TypeFunction  Type = "function"
+	TypeRange     Type = "range"
+	TypeNamespace Type = "namespace"
 )
 
 func (t Type) String() string { return string(t) }
@@ -176,6 +177,35 @@ func (r Range) String() string {
 		return fmt.Sprintf("range(%d, %d)", r.Start, r.End)
 	}
 	return fmt.Sprintf("range(%d, %d, %d)", r.Start, r.End, r.Step)
+}
+
+// Namespace is an imported module. It maps exported names to their values.
+//
+// Namespaces are built when a module body runs. They are read-only from the
+// language; member access goes through them but assignment does not.
+type Namespace struct {
+	Name   string
+	Keys   []string
+	Values map[string]Object
+}
+
+// Set stores name in the namespace, preserving insertion order.
+func (n *Namespace) Set(name string, value Object) {
+	if _, ok := n.Values[name]; !ok {
+		n.Keys = append(n.Keys, name)
+	}
+	n.Values[name] = value
+}
+
+// Get returns the value bound to name and whether it exists.
+func (n *Namespace) Get(name string) (Object, bool) {
+	v, ok := n.Values[name]
+	return v, ok
+}
+
+func (n *Namespace) Type() Type { return TypeNamespace }
+func (n *Namespace) String() string {
+	return "<namespace " + n.Name + ">"
 }
 
 // Repr renders o in a form that is close to its source literal.

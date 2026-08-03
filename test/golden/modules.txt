@@ -1,0 +1,6 @@
+6 squared is 36
+7 is even: false
+total: 15
+mean: 3.0
+sum of squares: 55
+counts: 1 2 3

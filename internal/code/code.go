@@ -48,6 +48,8 @@ const (
 	OpBuildMap    // uint16 count: collect count key/value pairs into a map
 	OpMakeIter    // pop an iterable, push an iterator
 	OpIterNext    // uint16 target: advance; jump when the iteration ends
+	OpPushModule  // uint16 index: push the namespace of a program module
+	OpGetMember   // uint16 const index: pop a namespace, push a named member
 	OpNeg
 	OpNot
 	OpAdd
@@ -92,6 +94,8 @@ var opNames = map[Opcode]string{
 	OpBuildMap:    "BUILD_MAP",
 	OpMakeIter:    "MAKE_ITER",
 	OpIterNext:    "ITER_NEXT",
+	OpPushModule:  "PUSH_MODULE",
+	OpGetMember:   "GET_MEMBER",
 	OpNeg:         "NEG",
 	OpNot:         "NOT",
 	OpAdd:         "ADD",
@@ -118,8 +122,10 @@ func (o Opcode) String() string {
 
 // Function is one compiled Sprout function.
 type Function struct {
-	Name       string
-	FileName   string
+	Name     string
+	FileName string
+	// FileIdx is the index of this function's source file in Program.Files.
+	FileIdx    int
 	ParamNames []string
 	// NumSlots is the number of slots in the call environment.
 	// It covers parameters and function-body locals.
@@ -145,9 +151,34 @@ func (f *Function) String() string {
 	return "<fn " + f.Name + ">"
 }
 
+// Module is one imported module in a compiled program.
+//
+// Init is the module's initializer function. When the VM runs it, the
+// resulting environment's slots are exported under Exports. An empty export
+// name means the slot is an import alias and stays private.
+type Module struct {
+	Path    string
+	Exports []string
+	Init    *Function
+}
+
 // Program is a compiled Sprout program. Main is the entry function.
 type Program struct {
 	Main *Function
+	// Modules lists the imported modules in dependency order. Main may
+	// reference them with OpPushModule.
+	Modules []*Module
+	// Files lists the source files of the program. Every function's FileIdx
+	// indexes into this list. Files[0] is the entry file.
+	Files []*source.File
+}
+
+// EntryFile returns the source file of the entry function.
+func (p *Program) EntryFile() *source.File {
+	if len(p.Files) > 0 {
+		return p.Files[0]
+	}
+	return nil
 }
 
 // Builder assembles one function's bytecode.
@@ -286,6 +317,17 @@ func (d *disassembler) instruction(ip int) (int, bool) {
 		idx := U16(d.fn.Code, ip+1)
 		if c, ok := d.fn.Consts[idx].(*Function); ok {
 			fmt.Fprintf(&d.b, "  %d  (%s)", idx, c.Name)
+		} else {
+			fmt.Fprintf(&d.b, "  %d", idx)
+		}
+		return ip + 3, true
+	case OpPushModule:
+		fmt.Fprintf(&d.b, "  %d", U16(d.fn.Code, ip+1))
+		return ip + 3, true
+	case OpGetMember:
+		idx := U16(d.fn.Code, ip+1)
+		if s, ok := d.fn.Consts[idx].(object.Str); ok {
+			fmt.Fprintf(&d.b, "  (%s)", s.Value)
 		} else {
 			fmt.Fprintf(&d.b, "  %d", idx)
 		}

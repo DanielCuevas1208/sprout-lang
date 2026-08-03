@@ -165,6 +165,55 @@ func TestMultiline(t *testing.T) {
 	}
 }
 
+func TestModules(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{
+			`import "lib/math"`,
+			`(program (import "lib/math" as math))`,
+		},
+		{
+			`import "lib/math" as m`,
+			`(program (import "lib/math" as m))`,
+		},
+		{
+			`import "math"`,
+			`(program (import "math" as math))`,
+		},
+		{
+			"m.square(5)",
+			"(program (call (member m square) (int 5)))",
+		},
+		{
+			"a.b.c(1)",
+			"(program (call (member (member a b) c) (int 1)))",
+		},
+		{
+			"m.f(1).g",
+			"(program (member (call (member m f) (int 1)) g))",
+		},
+	}
+	for _, c := range cases {
+		expectParse(t, c.src, c.want)
+	}
+}
+
+func TestModuleParseErrors(t *testing.T) {
+	cases := []struct {
+		src  string
+		want string
+	}{
+		{"import 5", "expected a module path string"},
+		{`import "x" as`, "expected an alias name"},
+		{`import "my-lib"`, "cannot use"},
+		{"m.", "expected a member name"},
+		{"m.5", "expected a member name"},
+		{"m.square = 5", "cannot assign to a module member"},
+	}
+	for _, c := range cases {
+		expectErrors(t, c.src, c.want)
+	}
+}
+
 func TestParseErrors(t *testing.T) {
 	cases := []struct {
 		src  string

@@ -1,0 +1,18 @@
+// A library of list statistics.
+//
+// Modules can import other modules. This file uses the math library through
+// the alias m.
+
+import "lib/math" as m
+
+fn total(xs) {
+	return fold(xs, 0, fn(acc, x) { return acc + x })
+}
+
+fn mean(xs) {
+	return float(total(xs)) / len(xs)
+}
+
+fn sum_of_squares(xs) {
+	return fold(xs, 0, fn(acc, x) { return acc + m.square(x) })
+}

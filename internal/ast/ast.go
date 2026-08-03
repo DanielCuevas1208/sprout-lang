@@ -109,6 +109,26 @@ func (s *FnStmt) End() source.Pos {
 }
 func (*FnStmt) stmt() {}
 
+// ImportStmt loads a module and binds it to a name.
+//
+// Alias is the binding name. The parser computes a default alias from the
+// module path when the source does not give one.
+type ImportStmt struct {
+	KwPos   source.Pos
+	Path    string // module specifier, as written
+	PathPos source.Pos
+	Alias   *Ident
+}
+
+func (s *ImportStmt) Pos() source.Pos { return s.KwPos }
+func (s *ImportStmt) End() source.Pos {
+	if s.Alias != nil {
+		return s.Alias.End()
+	}
+	return s.PathPos
+}
+func (*ImportStmt) stmt() {}
+
 // Block is a sequence of statements between braces.
 type Block struct {
 	Lbrace source.Pos
@@ -363,6 +383,27 @@ func (n *IndexExpr) Pos() source.Pos {
 func (n *IndexExpr) End() source.Pos { return n.Lbracket }
 func (*IndexExpr) expr()             {}
 
+// MemberExpr reads a named member of a module namespace.
+type MemberExpr struct {
+	X    Expr
+	Dot  source.Pos
+	Name *Ident
+}
+
+func (n *MemberExpr) Pos() source.Pos {
+	if n.X != nil {
+		return n.X.Pos()
+	}
+	return n.Dot
+}
+func (n *MemberExpr) End() source.Pos {
+	if n.Name != nil {
+		return n.Name.End()
+	}
+	return n.Dot
+}
+func (*MemberExpr) expr() {}
+
 // FnExpr is an anonymous function literal.
 type FnExpr struct {
 	FnPos  source.Pos
@@ -407,6 +448,13 @@ func (p *printer) node(n Node) {
 				p.field(":type " + v.Type.Name)
 			}
 			p.exprField("value", v.Value)
+		})
+	case *ImportStmt:
+		p.group("import", func() {
+			p.atom(strconv.Quote(v.Path))
+			if v.Alias != nil {
+				p.field("as " + v.Alias.Name)
+			}
 		})
 	case *FnStmt:
 		p.group("fn "+v.Name.Name, func() {
@@ -502,6 +550,11 @@ func (p *printer) node(n Node) {
 		p.group("index", func() {
 			p.node(v.X)
 			p.node(v.Index)
+		})
+	case *MemberExpr:
+		p.group("member", func() {
+			p.node(v.X)
+			p.atom(v.Name.Name)
 		})
 	case *FnExpr:
 		p.group("fn", func() {

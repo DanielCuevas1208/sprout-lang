@@ -39,6 +39,8 @@ const (
 	AND
 	OR
 	NOT
+	IMPORT
+	AS
 
 	// Operators and punctuation.
 	ASSIGN   // =
@@ -62,6 +64,7 @@ const (
 	RBRACE   // }
 	COMMA    // ,
 	COLON    // :
+	DOT      // .
 )
 
 var keywords = map[string]Kind{
@@ -83,6 +86,8 @@ var keywords = map[string]Kind{
 	"and":      AND,
 	"or":       OR,
 	"not":      NOT,
+	"import":   IMPORT,
+	"as":       AS,
 }
 
 // Lookup returns the keyword kind for name, or IDENT.
@@ -95,7 +100,7 @@ func Lookup(name string) Kind {
 
 // IsKeyword reports whether k is a language keyword.
 func (k Kind) IsKeyword() bool {
-	return k >= LET && k <= NOT
+	return k >= LET && k <= AS
 }
 
 // String returns a human-readable name for k.
@@ -154,6 +159,10 @@ func (k Kind) String() string {
 		return "or"
 	case NOT:
 		return "not"
+	case IMPORT:
+		return "import"
+	case AS:
+		return "as"
 	case ASSIGN:
 		return "="
 	case EQ:
@@ -196,6 +205,8 @@ func (k Kind) String() string {
 		return ","
 	case COLON:
 		return ":"
+	case DOT:
+		return "."
 	}
 	return fmt.Sprintf("token(%d)", int(k))
 }

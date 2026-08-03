@@ -99,3 +99,81 @@ func TestClosureCapture(t *testing.T) {
 	expectClean(t, "let count = 0\nfn bump() { count = count + 1 }\nbump()")
 	expectError(t, "fn outer() { fn inner() { return secret } }", "undefined name 'secret'")
 }
+
+// checkModulesMsgs checks src against an imports map of alias to exports.
+func checkModulesMsgs(t *testing.T, src string, imports map[string][]string) []string {
+	t.Helper()
+	file := source.NewFile("test.spr", src)
+	prog, diags := parser.Parse(file)
+	if len(diags) > 0 {
+		var msgs []string
+		for _, d := range diags {
+			msgs = append(msgs, "parse: "+d.Message)
+		}
+		return msgs
+	}
+	var msgs []string
+	for _, d := range CheckModules(file, prog, imports) {
+		msgs = append(msgs, d.Message)
+	}
+	return msgs
+}
+
+func TestModuleChecks(t *testing.T) {
+	imports := map[string][]string{
+		"math":  {"square", "cube"},
+		"utils": {},
+	}
+	cases := []struct {
+		src  string
+		want string // "" means clean
+	}{
+		{`import "lib/math"
+print(math.square(2))`, ""},
+		{`import "lib/math"
+print(math.square + 1)`, ""},
+		{`import "lib/math" as m
+print(m.cube(3))`, ""},
+		{`import "lib/math"
+print(math.missing(1))`, "module 'math' has no member 'missing'"},
+		{`import "lib/math"
+print(math.square + 1)
+print(math.nope)`, "module 'math' has no member 'nope'"},
+		{`import "lib/utils"
+print(utils.anything())`, "module 'utils' has no member 'anything'"},
+	}
+	for _, c := range cases {
+		msgs := checkModulesMsgs(t, c.src, imports)
+		if c.want == "" {
+			if len(msgs) > 0 {
+				t.Errorf("check %q: unexpected errors: %v", c.src, msgs)
+			}
+			continue
+		}
+		found := false
+		for _, m := range msgs {
+			if strings.Contains(m, c.want) {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("check %q: expected error containing %q, got %v", c.src, c.want, msgs)
+		}
+	}
+}
+
+func TestModuleDuplicateAlias(t *testing.T) {
+	src := `import "lib/math"
+import "lib/stats"
+let math = 5`
+	msgs := checkModulesMsgs(t, src, nil)
+	found := false
+	for _, m := range msgs {
+		if strings.Contains(m, "duplicate declaration of 'math'") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected duplicate alias error, got %v", msgs)
+	}
+}

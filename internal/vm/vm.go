@@ -90,6 +90,7 @@ func (e *RunError) Error() string { return e.Message }
 type vmErr struct {
 	msg    string
 	pos    source.Pos
+	file   *source.File
 	frames []diag.Frame
 }
 
@@ -98,6 +99,10 @@ type VM struct {
 	ctx    runtime.Context
 	stack  []object.Object
 	frames []*frame
+	// files maps a function's FileIdx to its source file.
+	files []*source.File
+	// modules holds the namespace of each program module.
+	modules []object.Object
 }
 
 // New returns a VM wired to the process standard streams.
@@ -125,19 +130,31 @@ func NewWithIO(stdin io.Reader, stdout, stderr io.Writer) *VM {
 // *RunError when the program stops with a runtime error.
 func (vm *VM) Run(file *source.File, prog *code.Program) (val object.Object, rerr *RunError) {
 	prevStack, prevFrames := vm.stack, vm.frames
+	prevFiles, prevModules := vm.files, vm.modules
 	vm.stack = vm.stack[:0]
 	vm.frames = vm.frames[:0]
+	vm.files = prog.Files
+	if len(vm.files) == 0 {
+		vm.files = []*source.File{file}
+	}
+	vm.modules = vm.modules[:0]
 	defer func() {
 		vm.stack = prevStack
 		vm.frames = prevFrames
+		vm.files = prevFiles
+		vm.modules = prevModules
 		if r := recover(); r != nil {
 			if e, ok := r.(*vmErr); ok {
-				val, rerr = nil, &RunError{Message: e.msg, File: file, Pos: e.pos, Frames: e.frames}
+				val, rerr = nil, &RunError{Message: e.msg, File: e.file, Pos: e.pos, Frames: e.frames}
 				return
 			}
 			panic(r)
 		}
 	}()
+
+	for _, mod := range prog.Modules {
+		vm.modules = append(vm.modules, vm.runModule(mod))
+	}
 
 	main := prog.Main
 	env := &Env{slots: make([]object.Object, main.NumSlots)}
@@ -151,9 +168,45 @@ func (vm *VM) Run(file *source.File, prog *code.Program) (val object.Object, rer
 	return val, nil
 }
 
+// runModule runs one module initializer and returns its namespace.
+func (vm *VM) runModule(mod *code.Module) object.Object {
+	fn := mod.Init
+	env := &Env{slots: make([]object.Object, fn.NumSlots)}
+	before := len(vm.frames)
+	vm.frames = append(vm.frames, &frame{
+		fn:   fn,
+		env:  env,
+		ip:   0,
+		base: len(vm.stack),
+	})
+	vm.runFrames(before)
+
+	ns := &object.Namespace{Name: mod.Path, Values: make(map[string]object.Object)}
+	for slot, name := range mod.Exports {
+		if name != "" {
+			ns.Set(name, env.slots[slot])
+		}
+	}
+	return ns
+}
+
 // failAtPos aborts execution with a runtime error.
 func (vm *VM) failAtPos(msg string, pos source.Pos) {
-	panic(&vmErr{msg: msg, pos: pos, frames: vm.stackTrace()})
+	panic(&vmErr{msg: msg, pos: pos, file: vm.currentFile(), frames: vm.stackTrace()})
+}
+
+// currentFile returns the source file of the innermost frame.
+func (vm *VM) currentFile() *source.File {
+	if n := len(vm.frames); n > 0 {
+		idx := vm.frames[n-1].fn.FileIdx
+		if idx >= 0 && idx < len(vm.files) {
+			return vm.files[idx]
+		}
+	}
+	if len(vm.files) > 0 {
+		return vm.files[0]
+	}
+	return nil
 }
 
 // stackTrace builds the call stack, skipping the entry frame.
@@ -326,6 +379,20 @@ func (vm *VM) runFrames(until int) object.Object {
 			idx := vm.pop()
 			container := vm.pop()
 			v, err := runtime.IndexGet(container, idx)
+			if err != nil {
+				vm.failAtPos(err.Error(), pos)
+			}
+			vm.push(v)
+		case code.OpPushModule:
+			vm.push(vm.modules[code.U16(fn.Code, fr.ip+1)])
+			fr.ip += 3
+		case code.OpGetMember:
+			pos := fr.pos()
+			fr.ip++
+			name := fn.Consts[code.U16(fn.Code, fr.ip)].(object.Str).Value
+			fr.ip += 2
+			container := vm.pop()
+			v, err := runtime.NamespaceGet(container, name)
 			if err != nil {
 				vm.failAtPos(err.Error(), pos)
 			}

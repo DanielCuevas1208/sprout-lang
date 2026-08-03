@@ -1,0 +1,21 @@
+// Modules let a program span several files.
+//
+// The import statement loads a file and binds its exports to a name.
+// Use "as" to pick a shorter or clearer name.
+//
+//   import "lib/math"         binds the exports as "math"
+//   import "lib/stats" as s   binds the exports as "s"
+
+import "lib/math" as m
+import "lib/stats" as stats
+
+let nums = [1, 2, 3, 4, 5]
+
+print("6 squared is " + str(m.square(6)))
+print("7 is even: " + str(m.is_even(7)))
+print("total: " + str(stats.total(nums)))
+print("mean: " + str(stats.mean(nums)))
+print("sum of squares: " + str(stats.sum_of_squares(nums)))
+
+let next = m.counter()
+print("counts: " + str(next()) + " " + str(next()) + " " + str(next()))

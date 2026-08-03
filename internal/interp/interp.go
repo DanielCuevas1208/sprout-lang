@@ -86,12 +86,13 @@ func (iv *Interpreter) Exec(file *source.File, prog *ast.Program) (val object.Ob
 	iv.file = file
 	iv.frames = nil
 	defer func() {
-		iv.file = prevFile
-		iv.frames = prevFrames
+		// Build the error while iv.file still names the running file.
 		if r := recover(); r != nil {
 			val = nil
 			rerr = iv.asRunError(r)
 		}
+		iv.file = prevFile
+		iv.frames = prevFrames
 	}()
 	val = iv.evalStmts(prog.Stmts, iv.globals)
 	return val, nil
@@ -106,15 +107,75 @@ func (iv *Interpreter) Eval(file *source.File, e ast.Expr) (val object.Object, r
 	iv.file = file
 	iv.frames = nil
 	defer func() {
-		iv.file = prevFile
-		iv.frames = prevFrames
 		if r := recover(); r != nil {
 			val = nil
 			rerr = iv.asRunError(r)
 		}
+		iv.file = prevFile
+		iv.frames = prevFrames
 	}()
 	val = iv.evalExpr(e, iv.globals)
 	return val, nil
+}
+
+// ExecWithImports evaluates prog as the entry of a module graph.
+//
+// imports binds each import alias to its already-built namespace. The entry
+// runs in a fresh scope whose parent is the globals, so builtins stay
+// visible and entry bindings do not leak between runs.
+func (iv *Interpreter) ExecWithImports(file *source.File, prog *ast.Program, imports map[string]*object.Namespace) (val object.Object, rerr *RunError) {
+	prevFile := iv.file
+	prevFrames := iv.frames
+	iv.file = file
+	iv.frames = nil
+	defer func() {
+		if r := recover(); r != nil {
+			val = nil
+			rerr = iv.asRunError(r)
+		}
+		iv.file = prevFile
+		iv.frames = prevFrames
+	}()
+	env := NewEnv(iv.globals)
+	for alias, ns := range imports {
+		env.Define(alias, ns, true)
+	}
+	val = iv.evalStmts(prog.Stmts, env)
+	return val, nil
+}
+
+// RunModule evaluates one module body and returns its namespace.
+//
+// imports binds the module's import aliases to namespaces that the loader
+// built for its dependencies. exports lists the names to copy from the
+// module scope into the namespace, in order.
+func (iv *Interpreter) RunModule(name string, file *source.File, prog *ast.Program, imports map[string]*object.Namespace, exports []string) (ns *object.Namespace, rerr *RunError) {
+	prevFile := iv.file
+	prevFrames := iv.frames
+	iv.file = file
+	iv.frames = nil
+	defer func() {
+		if r := recover(); r != nil {
+			ns = nil
+			rerr = iv.asRunError(r)
+		}
+		iv.file = prevFile
+		iv.frames = prevFrames
+	}()
+
+	env := NewEnv(iv.globals)
+	for alias, n := range imports {
+		env.Define(alias, n, true)
+	}
+	iv.evalStmts(prog.Stmts, env)
+
+	out := &object.Namespace{Name: name, Values: make(map[string]object.Object)}
+	for _, ex := range exports {
+		if v, err := env.Get(ex); err == nil {
+			out.Set(ex, v)
+		}
+	}
+	return out, nil
 }
 
 func (iv *Interpreter) asRunError(r any) *RunError {
@@ -160,6 +221,12 @@ func (iv *Interpreter) evalBlock(block *ast.Block, env *Env) object.Object {
 
 func (iv *Interpreter) evalStmt(s ast.Stmt, env *Env) object.Object {
 	switch n := s.(type) {
+	case *ast.ImportStmt:
+		if _, err := env.Get(n.Alias.Name); err != nil {
+			iv.raise("imports are only available in multi-file programs", n.KwPos)
+		}
+		return object.NilValue
+
 	case *ast.LetStmt:
 		var value object.Object = object.NilValue
 		if n.Value != nil {
@@ -310,6 +377,14 @@ func (iv *Interpreter) evalExpr(e ast.Expr, env *Env) object.Object {
 		v, err := runtime.IndexGet(container, idx)
 		if err != nil {
 			iv.raise(err.Error(), n.Lbracket)
+		}
+		return v
+
+	case *ast.MemberExpr:
+		container := iv.evalExpr(n.X, env)
+		v, err := runtime.NamespaceGet(container, n.Name.Name)
+		if err != nil {
+			iv.raise(err.Error(), n.Dot)
 		}
 		return v
 

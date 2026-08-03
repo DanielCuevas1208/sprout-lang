@@ -3,6 +3,7 @@
 This document describes the Sprout virtual machine.
 It covers the compiler, the instruction set, and the runtime.
 Read `docs/grammar.md` first for the syntax tree concepts.
+Read `docs/modules.md` for the module system.
 
 ## Pipeline
 
@@ -19,6 +20,11 @@ The VM executes those instructions.
 
 The `sprout vm` command runs the whole pipeline.
 The `sprout dis` command shows the compiled instructions.
+
+A program with imports becomes a module graph.
+The compiler gives each module an initializer function.
+The entry file becomes the main function.
+The VM runs module initializers before the main function.
 
 ## Bytecode format
 
@@ -101,6 +107,8 @@ This matches the interpreter, so closures see their own copy.
 | BUILD_MAP | count | Build a map. |
 | MAKE_ITER | none | Pop an iterable, push an iterator. |
 | ITER_NEXT | target | Advance, jump when done. |
+| PUSH_MODULE | index | Push a module namespace. |
+| GET_MEMBER | const index | Pop a namespace, push a named member. |
 | NEG | none | Negate the top. |
 | NOT | none | Invert the truthiness. |
 | ADD | none | Add the top two values. |
@@ -115,6 +123,25 @@ This matches the interpreter, so closures see their own copy.
 | LE | none | Test less or equal. |
 | GT | none | Test greater than. |
 | GE | none | Test greater or equal. |
+
+## Modules
+
+A program lists its modules in dependency order.
+Each module has a path, an initializer, and an export list.
+The export list aligns with the initializer's environment slots.
+An empty export name marks an import alias.
+
+The VM runs every initializer once.
+Each initializer builds a namespace object.
+`PUSH_MODULE` pushes that namespace by index.
+`GET_MEMBER` reads one named export from it.
+
+A nested module imports its dependencies the same way.
+Its initializer runs after its dependencies.
+
+The compiler records the source file of every function.
+A runtime error in a module points at that module.
+The VM uses the file index to render the diagnostic.
 
 ## Short-circuiting
 
@@ -143,6 +170,16 @@ A builtin is a runtime value with a name and a Go function.
 The VM reports errors with a source position and a call stack.
 It uses the same diagnostic format as the interpreter.
 A runtime error prints the message, the position, and the frames.
+
+## The build tool
+
+The `build` command serializes a compiled program to a bundle.
+The bundle format is deterministic.
+The same program always produces the same bytes.
+
+A bundle embeds every source file.
+The VM uses that text to render diagnostics.
+Run a bundle with `sprout vm file.sprc`.
 
 ## Try it
 
