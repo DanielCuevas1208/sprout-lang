@@ -1,0 +1,10 @@
+// modules.spr - split a program across files with import.
+//
+// Run: sprout run examples/modules.spr
+// Run: sprout vm examples/modules.spr
+
+import "modules/greeting"
+
+print(greeting.hi("sprout"))
+print("pi is", greeting.pi)
+print("the type is", type(greeting))

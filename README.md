@@ -3,6 +3,7 @@
 Sprout is a small programming language that runs on Go.
 It ships with a lexer, a Pratt parser, and two execution engines.
 Version 0.2 adds a stack-based bytecode virtual machine.
+Version 0.3 adds a module system.
 The interpreter and the VM share one runtime and one standard library.
 Sprout produces friendly diagnostics that point at the exact problem.
 
@@ -18,6 +19,7 @@ The codebase is structured to grow cleanly over time.
 - A disassembler for the compiled instruction stream.
 - Source diagnostics with a gutter, line, and caret.
 - A small standard library for real example programs.
+- A module system for multi-file programs.
 - A REPL for interactive experiments.
 - Deterministic tests for every stage of the pipeline.
 
@@ -142,6 +144,35 @@ Only `nil` and `false` are falsy.
 An expression ends at a newline unless it is inside brackets.
 See `docs/grammar.md` for the formal grammar.
 
+## Modules
+
+Version 0.3 adds a module system.
+An `import` statement loads another `.spr` file.
+A module exposes its top-level declarations as members.
+
+```sprout
+// lib/greeting.spr
+let pi = 3.14
+
+fn hi(name) {
+    return "hello, " + name
+}
+```
+
+```sprout
+// main.spr
+import "lib/greeting"
+
+print(greeting.hi("sprout"))    // hello, sprout
+print(greeting.pi)              // 3.14
+```
+
+The path is relative to the importing file.
+The `.spr` suffix is optional.
+Use `as` to bind a module to a different name.
+The runtime loads each module once per run.
+See `docs/tour.md` for the full walkthrough.
+
 ## Bytecode virtual machine
 
 Version 0.2 adds a compiler and a stack-based virtual machine.
@@ -166,6 +197,8 @@ Slots:  1
 ```
 
 Each line shows the offset, the opcode, and the source position.
+An `IMPORT` instruction loads a module.
+A `GET_MEMBER` instruction reads one of its exports.
 The engine parity tests prove the VM matches the interpreter.
 See `docs/bytecode.md` for the full reference.
 
@@ -197,6 +230,7 @@ The `examples` directory holds documented programs.
 - `math.spr` shows numbers and rounding.
 - `higher_order.spr` uses map, filter, and fold.
 - `guess.spr` is an interactive game.
+- `modules.spr` imports the module in `modules/greeting.spr`.
 
 Each example has a golden output in `test/golden`.
 Both engines must match the goldens.
@@ -214,6 +248,7 @@ internal/ast     the syntax tree
 internal/parser  the Pratt parser
 internal/checker static analysis
 internal/runtime value semantics and the standard library
+internal/module  module resolution and caching
 internal/interp  the tree-walking interpreter
 internal/code    opcodes and the instruction stream
 internal/compiler  bytecode compiler
@@ -225,6 +260,7 @@ internal/repl    the interactive session
 Each stage is independent.
 The parser feeds the checker and the compiler.
 The runtime is the single source of truth for both engines.
+The module loader gives both engines the same import rules.
 Adding a feature means updating the runtime, then both engines stay in step.
 
 ## Development
@@ -263,6 +299,7 @@ All tests pass on Go 1.22 and newer.
 | `internal/parser` | Precedence, statements, and recovery. |
 | `internal/checker` | Scope and static errors. |
 | `internal/runtime` | Arithmetic, comparison, and indexing. |
+| `internal/module` | Resolution, caching, and circular imports. |
 | `internal/interp` | Evaluation, closures, and runtime errors. |
 | `internal/code` | Opcodes, the builder, and disassembly. |
 | `internal/compiler` | Bytecode for expressions and control flow. |
@@ -272,6 +309,7 @@ All tests pass on Go 1.22 and newer.
 
 The parity tests run each program on both engines.
 The VM tests match the same goldens as the interpreter.
+The module tests run identical imports on both engines.
 Tests use only the standard library. They need no network or secrets.
 
 ## Roadmap
@@ -279,7 +317,9 @@ Tests use only the standard library. They need no network or secrets.
 Version 0.2 is complete. It adds the bytecode virtual machine.
 It keeps the same parser and checker.
 
-Version 0.3 adds a module system and a build tool.
+Version 0.3 is in progress. The module system is complete.
+The build tool remains.
+
 Version 0.4 adds structs, methods, and interfaces.
 Version 0.5 adds result types and pattern matching.
 Version 0.6 adds concurrency with channels.
@@ -294,6 +334,10 @@ Version 0.6 adds concurrency with channels.
 - The standard library is small by design.
 - The VM materializes a loop iterable before the loop starts.
 - `break` and `continue` inside a closure are not supported.
+- Imports resolve when a program runs, not when it is checked.
+- Modules cannot be assigned, and their members are read-only.
+- A module file base must be a valid identifier unless aliased.
+- There is no package registry or build tool yet.
 
 ## License
 

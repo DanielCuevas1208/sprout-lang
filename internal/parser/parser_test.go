@@ -109,6 +109,30 @@ func TestExpressions(t *testing.T) {
 	}
 }
 
+func TestImports(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`import "greeting"`, `(program (import "greeting" greeting))`},
+		{`import "lib/greeting"`, `(program (import "lib/greeting" greeting))`},
+		{`import "lib/greeting.spr"`, `(program (import "lib/greeting.spr" greeting))`},
+		{`import "lib/greeting" as g`, `(program (import "lib/greeting" g))`},
+	}
+	for _, c := range cases {
+		expectParse(t, c.src, c.want)
+	}
+}
+
+func TestMemberAccess(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{"greeting.hi", "(program (member greeting hi))"},
+		{"greeting.hi()", "(program (call (member greeting hi)))"},
+		{"a.b.c", "(program (member (member a b) c))"},
+		{"greeting.hi(\"x\")", `(program (call (member greeting hi) (string "x")))`},
+	}
+	for _, c := range cases {
+		expectParse(t, c.src, c.want)
+	}
+}
+
 func TestStatements(t *testing.T) {
 	cases := []struct{ src, want string }{
 		{
@@ -181,6 +205,11 @@ func TestParseErrors(t *testing.T) {
 		{"}", "unexpected '}'"},
 		{"for i range(0, 3) { }", "expected 'in'"},
 		{"let x = 1 )", "expected a statement"},
+		{`import 5`, "expected a module path after 'import'"},
+		{`import "my-lib"`, "as name"},
+		{`import "lib/greeting" as`, "expected a name after 'as'"},
+		{"greeting.", "a member name after '.'"},
+		{"greeting.hi = 5", "cannot assign to a module member"},
 	}
 	for _, c := range cases {
 		expectErrors(t, c.src, c.want)

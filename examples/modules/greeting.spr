@@ -1,0 +1,11 @@
+// greeting.spr - a module that exports values and functions.
+//
+// A module is a .spr file. Its top-level let, const, and fn
+// declarations become its members. The main file imports this
+// module as "modules/greeting".
+
+let pi = 3.14159
+
+fn hi(name) {
+    return "hello, " + name
+}

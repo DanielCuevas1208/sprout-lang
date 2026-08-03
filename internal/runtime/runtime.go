@@ -471,6 +471,17 @@ func SetIndex(container, idx, value object.Object) (object.Object, error) {
 	return nil, FmtErr("cannot assign to an index of a %s", container.Type())
 }
 
+// MemberGet reads a named member from a value.
+func MemberGet(container object.Object, name string) (object.Object, error) {
+	if m, ok := container.(*object.Module); ok {
+		if v, ok := m.Get(name); ok {
+			return v, nil
+		}
+		return nil, FmtErr("module '%s' has no member '%s'", m.Name, name)
+	}
+	return nil, FmtErr("cannot access member '%s' of a %s", name, container.Type())
+}
+
 // Sequence materializes an iterable value as a slice.
 func Sequence(o object.Object) ([]object.Object, error) {
 	switch v := o.(type) {

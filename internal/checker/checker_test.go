@@ -58,6 +58,10 @@ func TestCleanPrograms(t *testing.T) {
 		"let f = fn() { return 1 }\nprint(f())",
 		"let x: int = 5\nlet y: float = 5\nlet z: string = \"hi\"",
 		"let x = 1\nif x { print(1) } else { print(2) }",
+		`import "greeting"
+print(greeting.hi)`,
+		`import "lib/greeting" as g
+print(g.hi)`,
 	}
 	for _, src := range cases {
 		expectClean(t, src)
@@ -85,6 +89,14 @@ func TestCheckerErrors(t *testing.T) {
 		{"x = 5", "undefined name 'x'"},
 		{"let x = undefined_func()", "undefined name 'undefined_func'"},
 		{"1 = 2", "cannot assign to this expression"},
+		{`fn f() { import "greeting" }`, "top level"},
+		{`import "greeting" as g
+g = 1`, "cannot assign to module 'g'"},
+		{`import "greeting"
+g.hi = 1`, "cannot assign to a module member"},
+		{`print(greeting.hi)`, "undefined name 'greeting'"},
+		{`import "greeting"
+let greeting = 1`, "duplicate declaration"},
 	}
 	for _, c := range cases {
 		if c.want == "no error" {

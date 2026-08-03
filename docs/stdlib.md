@@ -1,6 +1,6 @@
 # Standard Library
 
-This page lists the built-in functions of Sprout 0.2.
+This page lists the built-in functions of Sprout 0.3.
 They are available in every program without an import.
 
 ## Output
@@ -22,6 +22,7 @@ They are available in every program without an import.
 | `type(x)` | Returns the type name of x as a string. |
 
 `int` and `float` accept numbers, booleans, and numeric strings.
+The `type` function reports `module` for a loaded module.
 
 ## Values
 

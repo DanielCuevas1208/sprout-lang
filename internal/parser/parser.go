@@ -50,6 +50,7 @@ var precedences = map[token.Kind]int{
 	token.CARET:    precPower,
 	token.LPAREN:   precCall,
 	token.LBRACKET: precCall,
+	token.DOT:      precCall,
 }
 
 // Parser turns tokens into an AST.
@@ -118,6 +119,8 @@ func (p *Parser) parseStatement() ast.Stmt {
 	case token.CONTINUE:
 		p.next()
 		return &ast.ContinueStmt{Position: t.Pos}
+	case token.IMPORT:
+		return p.parseImport()
 	case token.RBRACE:
 		return nil
 	case token.EOF:
@@ -281,6 +284,66 @@ func (p *Parser) parseReturn() ast.Stmt {
 	return &ast.ReturnStmt{ReturnPos: retTok.Pos, Value: value}
 }
 
+func (p *Parser) parseImport() ast.Stmt {
+	kw := p.next() // import
+	if !p.at(token.STRING) {
+		p.errorf(p.cur().Pos, "expected a module path after 'import', found %s", tokenString(p.cur()))
+		p.recoverStatement()
+		return nil
+	}
+	path := p.next().Value
+
+	var name *ast.Ident
+	if p.at(token.AS) {
+		p.next()
+		name = p.expectIdent("a name after 'as'")
+		if name == nil {
+			return nil
+		}
+	} else {
+		defaultName, ok := defaultModuleName(path)
+		if !ok {
+			p.errorf(kw.Pos, "cannot use '%s' as a module name; write 'import \"%s\" as name'", path, path)
+			p.recoverStatement()
+			return nil
+		}
+		name = &ast.Ident{Name: defaultName, Position: kw.Pos}
+	}
+	return &ast.ImportStmt{ImportPos: kw.Pos, Path: path, Name: name}
+}
+
+// defaultModuleName derives the binding name for an import spec.
+//
+// The name is the file base without the .spr suffix. It must be a valid
+// Sprout identifier. The rules mirror the lexer and module.ValidName.
+func defaultModuleName(spec string) (string, bool) {
+	base := spec
+	if i := strings.LastIndexAny(base, "/\\"); i >= 0 {
+		base = base[i+1:]
+	}
+	base = strings.TrimSuffix(base, ".spr")
+	if !validModuleName(base) {
+		return "", false
+	}
+	return base, true
+}
+
+func validModuleName(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		valid := c == '_' ||
+			(c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+			(i > 0 && c >= '0' && c <= '9')
+		if !valid {
+			return false
+		}
+	}
+	return token.Lookup(s) == token.IDENT
+}
+
 func (p *Parser) parseExprStmt() ast.Stmt {
 	e := p.parseExpression(precLowest)
 	if e == nil {
@@ -323,6 +386,12 @@ func (p *Parser) parseExpression(prec int) ast.Expr {
 		case token.LBRACKET:
 			// parseIndex consumes the '[' itself.
 			left = p.parseIndex(left)
+			if left == nil {
+				return nil
+			}
+		case token.DOT:
+			// parseMember consumes the '.' itself.
+			left = p.parseMember(left)
 			if left == nil {
 				return nil
 			}
@@ -502,6 +571,15 @@ func (p *Parser) parseIndex(x ast.Expr) ast.Expr {
 	p.close()
 	p.next()
 	return &ast.IndexExpr{X: x, Lbracket: open.Pos, Index: idx}
+}
+
+func (p *Parser) parseMember(x ast.Expr) ast.Expr {
+	dot := p.next() // .
+	name := p.expectIdent("a member name after '.'")
+	if name == nil {
+		return nil
+	}
+	return &ast.MemberExpr{X: x, Dot: dot.Pos, Name: name}
 }
 
 func (p *Parser) parseList() ast.Expr {
@@ -764,6 +842,8 @@ func assignTargetDesc(e ast.Expr) string {
 		return "a name"
 	case *ast.IndexExpr:
 		return "an index"
+	case *ast.MemberExpr:
+		return "a module member"
 	case *ast.CallExpr:
 		return "a call result"
 	}

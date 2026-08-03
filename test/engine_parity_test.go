@@ -7,7 +7,9 @@ import (
 
 	"github.com/sprout-lang/sprout/internal/checker"
 	"github.com/sprout-lang/sprout/internal/compiler"
+	"github.com/sprout-lang/sprout/internal/diag"
 	"github.com/sprout-lang/sprout/internal/interp"
+	"github.com/sprout-lang/sprout/internal/module"
 	"github.com/sprout-lang/sprout/internal/parser"
 	"github.com/sprout-lang/sprout/internal/source"
 	"github.com/sprout-lang/sprout/internal/vm"
@@ -185,6 +187,147 @@ func TestEnginesAgreeOnErrors(t *testing.T) {
 		}
 		if ivErr.Error() != vmErr.Error() {
 			t.Errorf("error messages differ for:\n%s\ninterp: %q\n    vm: %q", src, ivErr.Error(), vmErr.Error())
+		}
+	}
+}
+
+// moduleFS builds an in-memory filesystem for module parity tests.
+func moduleFS(files map[string]string) *module.MemFS {
+	fs := module.NewMemFS()
+	for name, text := range files {
+		fs.Add(name, text)
+	}
+	return fs
+}
+
+// runInterpModules runs src with an in-memory module filesystem.
+func runInterpModules(src string, fs *module.MemFS) (string, error) {
+	var stdout, stderr strings.Builder
+	iv := interp.NewWithIO(strings.NewReader(""), &stdout, &stderr)
+	iv.SetLoader(module.NewLoader(fs))
+	file := source.NewFile("main.spr", src)
+	prog, diags := parser.Parse(file)
+	for _, d := range diags {
+		if d.Severity == diag.SeverityError {
+			return "", errors.New("parse error: " + d.Message)
+		}
+	}
+	if cdiags := checker.Check(file, prog); len(cdiags) > 0 {
+		return "", errors.New("check error: " + cdiags[0].Message)
+	}
+	_, rerr := iv.Exec(file, prog)
+	if rerr != nil {
+		return stdout.String(), rerr
+	}
+	return stdout.String(), nil
+}
+
+// runVMModules runs src on the VM with an in-memory module filesystem.
+func runVMModules(src string, fs *module.MemFS) (string, error) {
+	var stdout, stderr strings.Builder
+	file := source.NewFile("main.spr", src)
+	prog, diags := parser.Parse(file)
+	for _, d := range diags {
+		if d.Severity == diag.SeverityError {
+			return "", errors.New("parse error: " + d.Message)
+		}
+	}
+	if cdiags := checker.Check(file, prog); len(cdiags) > 0 {
+		return "", errors.New("check error: " + cdiags[0].Message)
+	}
+	compiled, err := compiler.Compile(file, prog)
+	if err != nil {
+		return "", err
+	}
+	machine := vm.NewWithIO(strings.NewReader(""), &stdout, &stderr)
+	machine.SetLoader(module.NewLoader(fs))
+	_, rerr := machine.Run(file, compiled)
+	if rerr != nil {
+		return stdout.String(), rerr
+	}
+	return stdout.String(), nil
+}
+
+// TestEnginesAgreeOnModules checks that module programs behave identically
+// on both engines, including failure messages.
+func TestEnginesAgreeOnModules(t *testing.T) {
+	greeting := map[string]string{
+		"lib/greeting.spr": "let pi = 3.14\nfn hi(name) { return \"hello, \" + name }\n",
+	}
+	cases := []struct {
+		src   string
+		files map[string]string
+	}{
+		{
+			`import "lib/greeting"
+print(greeting.hi("world"))
+print(greeting.pi)
+print(type(greeting))`,
+			greeting,
+		},
+		{
+			`import "lib/greeting" as g
+print(g.hi("sprout"))`,
+			greeting,
+		},
+		{
+			`import "lib/outer"
+print(outer.value)`,
+			map[string]string{
+				"lib/outer.spr": "import \"inner\"\nlet value = inner.n + 1\n",
+				"lib/inner.spr": "let n = 41\n",
+			},
+		},
+		{
+			`import "counter"
+let a = counter.next()
+let b = counter.next()
+print(a, b)`,
+			map[string]string{
+				"counter.spr": "let count = 0\nfn next() {\n\tcount = count + 1\n\treturn count\n}\n",
+			},
+		},
+		{
+			`import "mathlib"
+print(mathlib.double(21))`,
+			map[string]string{
+				"mathlib.spr": "fn double(x) { return x * 2 }\n",
+			},
+		},
+		{
+			`import "greeting"
+print(greeting.missing)`,
+			greeting,
+		},
+		{
+			`import "missing"`,
+			greeting,
+		},
+		{
+			`import "boom"
+print("after")`,
+			map[string]string{
+				"boom.spr": "let x = 1 / 0\n",
+			},
+		},
+	}
+
+	for _, c := range cases {
+		fs := moduleFS(c.files)
+		ivOut, ivErr := runInterpModules(c.src, fs)
+		vmOut, vmErr := runVMModules(c.src, moduleFS(c.files))
+		if ivErr == nil && vmErr == nil {
+			if ivOut != vmOut {
+				t.Errorf("engines differ for:\n%s\ninterp: %q\n    vm: %q", c.src, ivOut, vmOut)
+			}
+			continue
+		}
+		if (ivErr == nil) != (vmErr == nil) {
+			t.Errorf("one engine failed for:\n%s\ninterp err: %v\nvm err: %v", c.src, ivErr, vmErr)
+			continue
+		}
+		if ivErr.Error() != vmErr.Error() {
+			t.Errorf("error messages differ for:\n%s\ninterp: %q\n    vm: %q", c.src, ivErr.Error(), vmErr.Error())
 		}
 	}
 }

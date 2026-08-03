@@ -57,7 +57,7 @@ func TestVersion(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("version exit code %d", code)
 	}
-	if !strings.Contains(out, "0.2.0") {
+	if !strings.Contains(out, "0.3.0") {
 		t.Errorf("version output: %q", out)
 	}
 }
@@ -233,5 +233,78 @@ func TestUnknownCommand(t *testing.T) {
 	}
 	if !strings.Contains(errOut, "unknown command") {
 		t.Errorf("stderr: %q", errOut)
+	}
+}
+
+func writeModuleTree(t *testing.T, main, moduleSrc string) string {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "greeting.spr"), []byte(moduleSrc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "main.spr")
+	if err := os.WriteFile(path, []byte(main), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestRunImportsModule(t *testing.T) {
+	main := "import \"greeting\"\nprint(greeting.hi(\"cli\"))\n"
+	module := "fn hi(name) { return \"hello, \" + name }\n"
+	path := writeModuleTree(t, main, module)
+
+	out, _, code := runCLI(t, "", "run", path)
+	if code != 0 {
+		t.Fatalf("run exit code %d", code)
+	}
+	if !strings.Contains(out, "hello, cli") {
+		t.Errorf("output: %q", out)
+	}
+}
+
+func TestVMImportsModule(t *testing.T) {
+	main := "import \"greeting\"\nprint(greeting.hi(\"vm\"))\n"
+	module := "fn hi(name) { return \"hello, \" + name }\n"
+	path := writeModuleTree(t, main, module)
+
+	out, _, code := runCLI(t, "", "vm", path)
+	if code != 0 {
+		t.Fatalf("vm exit code %d", code)
+	}
+	if !strings.Contains(out, "hello, vm") {
+		t.Errorf("output: %q", out)
+	}
+}
+
+func TestRunMissingModuleFails(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "main.spr")
+	if err := os.WriteFile(path, []byte("import \"nope\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, errOut, code := runCLI(t, "", "run", path)
+	if code == 0 {
+		t.Fatalf("run should fail, exit code 0")
+	}
+	if !strings.Contains(errOut, "cannot find module 'nope'") {
+		t.Errorf("stderr: %q", errOut)
+	}
+}
+
+func TestDisShowsImportInstruction(t *testing.T) {
+	main := "import \"greeting\"\nprint(greeting.hi)\n"
+	module := "fn hi(name) { return name }\n"
+	path := writeModuleTree(t, main, module)
+
+	out, _, code := runCLI(t, "", "dis", path)
+	if code != 0 {
+		t.Fatalf("dis exit code %d", code)
+	}
+	if !strings.Contains(out, "IMPORT") {
+		t.Errorf("expected IMPORT instruction, output: %q", out)
+	}
+	if !strings.Contains(out, "GET_MEMBER") {
+		t.Errorf("expected GET_MEMBER instruction, output: %q", out)
 	}
 }

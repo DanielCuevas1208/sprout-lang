@@ -14,7 +14,7 @@ Save the code as `hello.spr`. Run it with `sprout run hello.spr`.
 
 ## Values and types
 
-Sprout has nine value types.
+Sprout has ten value types.
 
 - `int` holds a 64-bit integer.
 - `float` holds a 64-bit number.
@@ -25,6 +25,7 @@ Sprout has nine value types.
 - `map` holds keys and values. Keys are strings.
 - `function` is a callable value.
 - `range` is a sequence of integers.
+- `module` is a loaded source file.
 
 Use the `type` function to ask for the type of a value.
 
@@ -212,6 +213,42 @@ condition is false. It is useful for tests and examples.
 ```sprout
 assert(2 + 2 == 4, "math still works")
 ```
+
+## Modules
+
+An `import` loads another `.spr` file as a module.
+A module exposes its top-level declarations as members.
+
+```sprout
+// lib/greeting.spr
+let pi = 3.14
+
+fn hi(name) {
+    return "hello, " + name
+}
+```
+
+```sprout
+// main.spr
+import "lib/greeting"
+
+print(greeting.hi("sprout"))    // hello, sprout
+print(greeting.pi)              // 3.14
+```
+
+The path is relative to the importing file.
+The `.spr` suffix is optional.
+Use `as` to bind the module to a different name.
+
+```sprout
+import "lib/greeting" as greet
+print(greet.hi("again"))
+```
+
+Sprout loads each module once per run.
+A module may import other modules.
+The runtime reports missing files and circular imports.
+Both engines resolve imports the same way.
 
 ## Interactive mode
 

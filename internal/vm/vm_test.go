@@ -7,6 +7,7 @@ import (
 	"github.com/sprout-lang/sprout/internal/checker"
 	"github.com/sprout-lang/sprout/internal/compiler"
 	"github.com/sprout-lang/sprout/internal/diag"
+	"github.com/sprout-lang/sprout/internal/module"
 	"github.com/sprout-lang/sprout/internal/parser"
 	"github.com/sprout-lang/sprout/internal/source"
 )
@@ -299,4 +300,165 @@ add_entry("one")
 add_entry("two")
 print(log)
 `, "[one, two]\n")
+}
+
+// runModules runs src with an in-memory module filesystem.
+//
+// The main file is named main.spr, so imports resolve relative to it.
+func runModules(src string, files map[string]string) (string, *RunError) {
+	fs := module.NewMemFS()
+	for name, text := range files {
+		fs.Add(name, text)
+	}
+	file := source.NewFile("main.spr", src)
+	prog, diags := parser.Parse(file)
+	for _, d := range diags {
+		if d.Severity == diag.SeverityError {
+			return "", &RunError{Message: "parse error: " + d.Message}
+		}
+	}
+	if cdiags := checker.Check(file, prog); len(cdiags) > 0 {
+		return "", &RunError{Message: "check error: " + cdiags[0].Message}
+	}
+	compiled, err := compiler.Compile(file, prog)
+	if err != nil {
+		return "", &RunError{Message: "compile error: " + err.Error()}
+	}
+	var stdout, stderr strings.Builder
+	machine := NewWithIO(strings.NewReader(""), &stdout, &stderr)
+	machine.SetLoader(module.NewLoader(fs))
+	_, rerr := machine.Run(file, compiled)
+	return stdout.String(), rerr
+}
+
+func expectModuleOutput(t *testing.T, src string, files map[string]string, want string) {
+	t.Helper()
+	got, rerr := runModules(src, files)
+	if rerr != nil {
+		t.Fatalf("module run %q: runtime error: %s", src, rerr.Message)
+	}
+	if got != want {
+		t.Errorf("module run %q:\n got: %q\nwant: %q", src, got, want)
+	}
+}
+
+func expectModuleError(t *testing.T, src string, files map[string]string, want string) {
+	t.Helper()
+	_, rerr := runModules(src, files)
+	if rerr == nil {
+		t.Fatalf("module run %q: expected error containing %q, got none", src, want)
+	}
+	if !strings.Contains(rerr.Message, want) {
+		t.Errorf("module run %q: error %q does not contain %q", src, rerr.Message, want)
+	}
+}
+
+func TestVMImportModule(t *testing.T) {
+	expectModuleOutput(t, `
+import "lib/greeting"
+print(greeting.hi("world"))
+print(greeting.pi)
+print(type(greeting))
+`, map[string]string{
+		"lib/greeting.spr": "let pi = 3.14\nfn hi(name) { return \"hello, \" + name }\n",
+	}, "hello, world\n3.14\nmodule\n")
+}
+
+func TestVMImportAlias(t *testing.T) {
+	expectModuleOutput(t, `
+import "lib/greeting" as g
+print(g.hi("sprout"))
+`, map[string]string{
+		"lib/greeting.spr": "fn hi(name) { return \"hi, \" + name }\n",
+	}, "hi, sprout\n")
+}
+
+func TestVMModuleChainedImports(t *testing.T) {
+	expectModuleOutput(t, `
+import "lib/outer"
+print(outer.value)
+`, map[string]string{
+		"lib/outer.spr": "import \"inner\"\nlet value = inner.n + 1\n",
+		"lib/inner.spr": "let n = 41\n",
+	}, "42\n")
+}
+
+func TestVMModuleCached(t *testing.T) {
+	expectModuleOutput(t, `
+import "counter"
+let first = counter.next()
+let second = counter.next()
+print(first, second)
+`, map[string]string{
+		"counter.spr": "let count = 0\nfn next() {\n\tcount = count + 1\n\treturn count\n}\n",
+	}, "1 2\n")
+}
+
+func TestVMModuleExportsFunctions(t *testing.T) {
+	expectModuleOutput(t, `
+import "mathlib"
+print(mathlib.double(21))
+`, map[string]string{
+		"mathlib.spr": "fn double(x) { return x * 2 }\n",
+	}, "42\n")
+}
+
+func TestVMModuleMissingMember(t *testing.T) {
+	expectModuleError(t, `
+import "greeting"
+print(greeting.missing)
+`, map[string]string{
+		"greeting.spr": "let pi = 3.14\n",
+	}, "has no member 'missing'")
+}
+
+func TestVMModuleMissingFile(t *testing.T) {
+	expectModuleError(t, `import "missing"`, map[string]string{}, "cannot find module 'missing'")
+}
+
+func TestVMModuleCircularImport(t *testing.T) {
+	expectModuleError(t, `import "a"`, map[string]string{
+		"a.spr": "import \"b\"\nlet x = 1\n",
+		"b.spr": "import \"a\"\nlet y = 2\n",
+	}, "circular import")
+}
+
+func TestVMModuleRuntimeError(t *testing.T) {
+	expectModuleError(t, `
+import "boom"
+print("after")
+`, map[string]string{
+		"boom.spr": "let x = 1 / 0\n",
+	}, "cannot load module 'boom': cannot divide by zero")
+}
+
+func TestVMModuleParseError(t *testing.T) {
+	expectModuleError(t, `import "bad"`, map[string]string{
+		"bad.spr": "let x =\n",
+	}, "cannot load module 'bad'")
+}
+
+func TestVMModuleCheckError(t *testing.T) {
+	expectModuleError(t, `import "bad"`, map[string]string{
+		"bad.spr": "print(undefined_name)\n",
+	}, "undefined name 'undefined_name'")
+}
+
+func TestVMModuleErrorFrames(t *testing.T) {
+	_, rerr := runModules(`import "boom"`, map[string]string{
+		"boom.spr": "fn inner() {\n\treturn 1 / 0\n}\nlet x = inner()\n",
+	})
+	if rerr == nil {
+		t.Fatal("expected a runtime error")
+	}
+	// The trace keeps the module's internal function frame.
+	if len(rerr.Frames) != 1 || rerr.Frames[0].Name != "inner" {
+		t.Errorf("frames: %+v", rerr.Frames)
+	}
+	// The trace must not leak the module's synthetic <main> entry frame.
+	for _, f := range rerr.Frames {
+		if f.Name == "<main>" {
+			t.Errorf("unexpected synthetic frame: %+v", f)
+		}
+	}
 }

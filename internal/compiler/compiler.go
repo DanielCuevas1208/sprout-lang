@@ -87,7 +87,21 @@ func Compile(file *source.File, prog *ast.Program) (p *code.Program, err error) 
 	c.compileStmts(prog.Stmts)
 	c.b().Add(code.OpReturn, endPos(prog.Stmts))
 	main := c.finishFn()
+	main.Exports = rootExports(c.cur())
 	return &code.Program{Main: main}, nil
+}
+
+// rootExports records the name-to-slot map of a root scope.
+//
+// The VM uses the map to collect a module's exports after it runs. The
+// exported names themselves come from the module's statement list, so the
+// map can include import bindings without affecting that order.
+func rootExports(sc *scope) map[string]int {
+	exports := make(map[string]int, len(sc.names))
+	for name, sym := range sc.names {
+		exports[name] = sym.slot
+	}
+	return exports
 }
 
 // compileError is the panic signal for internal compiler failures.
@@ -260,6 +274,9 @@ func (c *Compiler) compileStmt(s ast.Stmt) {
 	case *ast.ContinueStmt:
 		c.emitContinue(n.Position)
 
+	case *ast.ImportStmt:
+		c.compileImport(n)
+
 	case *ast.IfStmt:
 		c.compileIf(n)
 
@@ -272,6 +289,13 @@ func (c *Compiler) compileStmt(s ast.Stmt) {
 	default:
 		c.failf(s.Pos(), "internal error: unsupported statement")
 	}
+}
+
+func (c *Compiler) compileImport(n *ast.ImportStmt) {
+	c.declare(n.Name.Name, true, n.ImportPos)
+	idx := c.b().Const(object.Str{Value: n.Path})
+	c.b().AddU16(code.OpImport, idx, n.ImportPos)
+	c.emitSet(n.Name.Name, n.ImportPos)
 }
 
 func (c *Compiler) compileIf(n *ast.IfStmt) {
@@ -453,6 +477,11 @@ func (c *Compiler) compileExpr(e ast.Expr) {
 		c.compileExpr(n.X)
 		c.compileExpr(n.Index)
 		c.b().Add(code.OpGetIndex, n.Lbracket)
+
+	case *ast.MemberExpr:
+		c.compileExpr(n.X)
+		idx := c.b().Const(object.Str{Value: n.Name.Name})
+		c.b().AddU16(code.OpGetMember, idx, n.Dot)
 
 	case *ast.FnExpr:
 		idx := c.enterFn("", n.Params, n.Body)

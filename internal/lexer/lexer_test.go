@@ -59,15 +59,34 @@ func TestAllOperators(t *testing.T) {
 	}
 }
 
+func TestImportAndMemberTokens(t *testing.T) {
+	toks := lex(`import "lib/greeting" as g
+greeting.hi
+`)
+	got := kinds(toks)
+	want := []token.Kind{
+		token.IMPORT, token.STRING, token.AS, token.IDENT, token.NEWLINE,
+		token.IDENT, token.DOT, token.IDENT, token.NEWLINE, token.EOF,
+	}
+	if len(got) != len(want) {
+		t.Fatalf("token count: got %d, want %d\n%v", len(got), len(want), got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("token %d: got %v, want %v", i, got[i], want[i])
+		}
+	}
+}
+
 func TestKeywords(t *testing.T) {
-	src := "let const fn if elif else for in while return break continue true false nil and or not\n"
+	src := "let const fn if elif else for in while return break continue import as true false nil and or not\n"
 	toks := lex(src)
 	got := kinds(toks)
 	want := []token.Kind{
 		token.LET, token.CONST, token.FN, token.IF, token.ELIF, token.ELSE,
 		token.FOR, token.IN, token.WHILE, token.RETURN, token.BREAK,
-		token.CONTINUE, token.TRUE, token.FALSE, token.NIL, token.AND,
-		token.OR, token.NOT, token.NEWLINE, token.EOF,
+		token.CONTINUE, token.IMPORT, token.AS, token.TRUE, token.FALSE,
+		token.NIL, token.AND, token.OR, token.NOT, token.NEWLINE, token.EOF,
 	}
 	if len(got) != len(want) {
 		t.Fatalf("token count: got %d, want %d\n%v", len(got), len(want), got)
@@ -179,7 +198,6 @@ func TestErrors(t *testing.T) {
 		{"/* never closed", "unterminated block comment"},
 		{`let x = #`, "unexpected character"},
 		{`1e`, "expected digits in exponent"},
-		{`5.`, "unexpected character"},
 	}
 	for _, c := range cases {
 		msgs := lexErrors(c.src)

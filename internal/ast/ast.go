@@ -203,6 +203,17 @@ func (s *ContinueStmt) Pos() source.Pos { return s.Position }
 func (s *ContinueStmt) End() source.Pos { return s.Position }
 func (*ContinueStmt) stmt()             {}
 
+// ImportStmt loads a module and binds it to a name.
+type ImportStmt struct {
+	ImportPos source.Pos
+	Path      string
+	Name      *Ident
+}
+
+func (s *ImportStmt) Pos() source.Pos { return s.ImportPos }
+func (s *ImportStmt) End() source.Pos { return s.Name.End() }
+func (*ImportStmt) stmt()             {}
+
 // ExprStmt is an expression used for its side effect.
 type ExprStmt struct {
 	X Expr
@@ -363,6 +374,22 @@ func (n *IndexExpr) Pos() source.Pos {
 func (n *IndexExpr) End() source.Pos { return n.Lbracket }
 func (*IndexExpr) expr()             {}
 
+// MemberExpr reads a named member from a value.
+type MemberExpr struct {
+	X    Expr
+	Dot  source.Pos
+	Name *Ident
+}
+
+func (n *MemberExpr) Pos() source.Pos {
+	if n.X != nil {
+		return n.X.Pos()
+	}
+	return n.Dot
+}
+func (n *MemberExpr) End() source.Pos { return n.Name.End() }
+func (*MemberExpr) expr()             {}
+
 // FnExpr is an anonymous function literal.
 type FnExpr struct {
 	FnPos  source.Pos
@@ -444,6 +471,11 @@ func (p *printer) node(n Node) {
 		p.group("break", nil)
 	case *ContinueStmt:
 		p.group("continue", nil)
+	case *ImportStmt:
+		p.group("import", func() {
+			p.atom(strconv.Quote(v.Path))
+			p.name(v.Name)
+		})
 	case *ExprStmt:
 		p.node(v.X)
 	case *Block:
@@ -502,6 +534,11 @@ func (p *printer) node(n Node) {
 		p.group("index", func() {
 			p.node(v.X)
 			p.node(v.Index)
+		})
+	case *MemberExpr:
+		p.group("member", func() {
+			p.node(v.X)
+			p.atom(v.Name.Name)
 		})
 	case *FnExpr:
 		p.group("fn", func() {

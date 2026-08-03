@@ -12,8 +12,11 @@ import (
 	"os"
 
 	"github.com/sprout-lang/sprout/internal/ast"
+	"github.com/sprout-lang/sprout/internal/checker"
 	"github.com/sprout-lang/sprout/internal/diag"
+	"github.com/sprout-lang/sprout/internal/module"
 	"github.com/sprout-lang/sprout/internal/object"
+	"github.com/sprout-lang/sprout/internal/parser"
 	"github.com/sprout-lang/sprout/internal/runtime"
 	"github.com/sprout-lang/sprout/internal/source"
 	"github.com/sprout-lang/sprout/internal/token"
@@ -25,6 +28,7 @@ type Interpreter struct {
 	file    *source.File
 	ctx     runtime.Context
 	frames  []diag.Frame
+	loader  *module.Loader
 }
 
 // New returns an interpreter wired to the process standard streams.
@@ -43,8 +47,24 @@ func NewWithIO(stdin io.Reader, stdout, stderr io.Writer) *Interpreter {
 			return iv.call(fn, args, pos)
 		},
 	}
-	RegisterBuiltins(iv)
+	RegisterBuiltins(iv.globals)
+	iv.loader = module.NewLoader(module.OS{})
 	return iv
+}
+
+// SetLoader replaces the module loader used by the interpreter.
+//
+// Tests use this to point the interpreter at an in-memory filesystem.
+func (iv *Interpreter) SetLoader(l *module.Loader) { iv.loader = l }
+
+// stdEnv returns a fresh environment that holds the standard library.
+//
+// Modules run against a fresh standard environment so they never see names
+// from the entry program or from earlier modules.
+func (iv *Interpreter) stdEnv() *Env {
+	env := NewEnv(nil)
+	RegisterBuiltins(env)
+	return env
 }
 
 // Globals returns the top-level environment.
@@ -86,12 +106,12 @@ func (iv *Interpreter) Exec(file *source.File, prog *ast.Program) (val object.Ob
 	iv.file = file
 	iv.frames = nil
 	defer func() {
-		iv.file = prevFile
-		iv.frames = prevFrames
 		if r := recover(); r != nil {
 			val = nil
 			rerr = iv.asRunError(r)
 		}
+		iv.file = prevFile
+		iv.frames = prevFrames
 	}()
 	val = iv.evalStmts(prog.Stmts, iv.globals)
 	return val, nil
@@ -106,12 +126,12 @@ func (iv *Interpreter) Eval(file *source.File, e ast.Expr) (val object.Object, r
 	iv.file = file
 	iv.frames = nil
 	defer func() {
-		iv.file = prevFile
-		iv.frames = prevFrames
 		if r := recover(); r != nil {
 			val = nil
 			rerr = iv.asRunError(r)
 		}
+		iv.file = prevFile
+		iv.frames = prevFrames
 	}()
 	val = iv.evalExpr(e, iv.globals)
 	return val, nil
@@ -139,6 +159,14 @@ func (iv *Interpreter) raise(message string, pos source.Pos) {
 		pos:     pos,
 		frames:  append([]diag.Frame(nil), iv.frames...),
 	})
+}
+
+// raiseFrames aborts evaluation with a runtime error and a ready-made stack.
+//
+// Module loading uses this so a failure inside a module keeps the frames
+// that were built while the module was running.
+func (iv *Interpreter) raiseFrames(message string, pos source.Pos, frames []diag.Frame) {
+	panic(&runErr{message: message, pos: pos, frames: frames})
 }
 
 func (iv *Interpreter) evalStmts(stmts []ast.Stmt, env *Env) object.Object {
@@ -188,6 +216,14 @@ func (iv *Interpreter) evalStmt(s ast.Stmt, env *Env) object.Object {
 
 	case *ast.ContinueStmt:
 		panic(&continueSignal{pos: n.Position})
+
+	case *ast.ImportStmt:
+		m, lerr := iv.loadModule(n.Path, n.Name.Name, n.ImportPos)
+		if lerr != nil {
+			iv.raiseFrames(lerr.Message, lerr.Pos, lerr.Frames)
+		}
+		env.Define(n.Name.Name, m, true)
+		return object.NilValue
 
 	case *ast.IfStmt:
 		if runtime.Truthy(iv.evalExpr(n.Cond, env)) {
@@ -310,6 +346,14 @@ func (iv *Interpreter) evalExpr(e ast.Expr, env *Env) object.Object {
 		v, err := runtime.IndexGet(container, idx)
 		if err != nil {
 			iv.raise(err.Error(), n.Lbracket)
+		}
+		return v
+
+	case *ast.MemberExpr:
+		base := iv.evalExpr(n.X, env)
+		v, err := runtime.MemberGet(base, n.Name.Name)
+		if err != nil {
+			iv.raise(err.Error(), n.Dot)
 		}
 		return v
 
@@ -480,4 +524,98 @@ func (iv *Interpreter) pushFrame(name string, pos source.Pos) {
 
 func (iv *Interpreter) popFrame() {
 	iv.frames = iv.frames[:len(iv.frames)-1]
+}
+
+// loadModule resolves, runs, and caches the module named by spec.
+//
+// The binding name is used only for display. On failure the returned error
+// is a RunError that points at the import site.
+func (iv *Interpreter) loadModule(spec, name string, pos source.Pos) (m *object.Module, rerr *RunError) {
+	if iv.file == nil {
+		return nil, &RunError{Message: "cannot load a module without a source file", Pos: pos}
+	}
+	path, ok := iv.loader.Resolve(iv.file.Name, spec)
+	if !ok {
+		return nil, &RunError{Message: fmt.Sprintf("cannot find module '%s'", spec), Pos: pos}
+	}
+	if cached, ok := iv.loader.Cached(path); ok {
+		return cached, nil
+	}
+	if !iv.loader.MarkLoading(path) {
+		return nil, &RunError{Message: fmt.Sprintf("circular import of module '%s'", spec), Pos: pos}
+	}
+	defer iv.loader.DoneLoading(path)
+
+	file, err := iv.loader.Source(path)
+	if err != nil {
+		return nil, &RunError{Message: fmt.Sprintf("cannot load module '%s': %v", spec, err), Pos: pos}
+	}
+	prog, diags := parser.Parse(file)
+	if msg := firstError(diags); msg != "" {
+		return nil, &RunError{Message: fmt.Sprintf("cannot load module '%s': %s (at %s)", spec, msg, path), Pos: pos}
+	}
+	if diags := checker.Check(file, prog); len(diags) > 0 {
+		d := diags[0]
+		return nil, &RunError{Message: fmt.Sprintf("cannot load module '%s': %s (at %s:%d:%d)",
+			spec, d.Message, path, d.Pos.Line, d.Pos.Column), Pos: pos}
+	}
+
+	mod, merr := iv.execModule(file, prog, name, path)
+	if merr != nil {
+		return nil, &RunError{
+			Message: fmt.Sprintf("cannot load module '%s': %s", spec, moduleAt(path, merr.Pos, merr.Message)),
+			Pos:     pos,
+			Frames:  merr.Frames,
+		}
+	}
+	iv.loader.Cache(path, mod)
+	return mod, nil
+}
+
+// execModule runs a module body and collects its exports.
+//
+// The module runs with its own source file and a fresh standard
+// environment, so its runtime errors and stack frames point at the module.
+func (iv *Interpreter) execModule(file *source.File, prog *ast.Program, name, path string) (mod *object.Module, rerr *RunError) {
+	prevFile, prevFrames := iv.file, iv.frames
+	iv.file = file
+	iv.frames = nil
+	defer func() {
+		if r := recover(); r != nil {
+			rerr = iv.asRunError(r)
+		}
+		iv.file = prevFile
+		iv.frames = prevFrames
+	}()
+
+	env := NewEnv(iv.stdEnv())
+	iv.evalStmts(prog.Stmts, env)
+
+	mod = object.NewModule(name, path)
+	for _, ename := range module.Exports(prog) {
+		v, err := env.Get(ename)
+		if err != nil {
+			return nil, &RunError{Message: err.Error(), File: file}
+		}
+		mod.Set(ename, v)
+	}
+	return mod, nil
+}
+
+// firstError returns the message of the first error diagnostic.
+func firstError(diags []diag.Diagnostic) string {
+	for _, d := range diags {
+		if d.Severity == diag.SeverityError {
+			return d.Message
+		}
+	}
+	return ""
+}
+
+// moduleAt renders a module error detail with its source position.
+func moduleAt(path string, pos source.Pos, msg string) string {
+	if pos.IsValid() {
+		return fmt.Sprintf("%s (at %s:%d:%d)", msg, path, pos.Line, pos.Column)
+	}
+	return msg
 }

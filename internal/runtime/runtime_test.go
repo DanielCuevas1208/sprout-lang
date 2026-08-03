@@ -205,6 +205,31 @@ func TestSequence(t *testing.T) {
 	}
 }
 
+func TestMemberGet(t *testing.T) {
+	m := object.NewModule("greeting", "lib/greeting.spr")
+	m.Set("pi", floatVal(3.14))
+
+	v, err := MemberGet(m, "pi")
+	if err != nil {
+		t.Fatalf("member get: %v", err)
+	}
+	if v.String() != "3.14" {
+		t.Errorf("member value: got %s", v)
+	}
+
+	if _, err := MemberGet(m, "missing"); err == nil {
+		t.Error("expected a missing member error")
+	} else if !strings.Contains(err.Error(), "has no member 'missing'") {
+		t.Errorf("missing member error: %v", err)
+	}
+
+	if _, err := MemberGet(intVal(1), "pi"); err == nil {
+		t.Error("expected a non-module member error")
+	} else if !strings.Contains(err.Error(), "cannot access member 'pi' of a int") {
+		t.Errorf("non-module member error: %v", err)
+	}
+}
+
 func TestTruthy(t *testing.T) {
 	if Truthy(object.NilValue) {
 		t.Error("nil should be falsy")

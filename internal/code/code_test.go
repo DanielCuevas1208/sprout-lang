@@ -16,6 +16,8 @@ func TestOpcodeNames(t *testing.T) {
 		OpReturnValue: "RETURN_VALUE",
 		OpJumpIfFalse: "JUMP_IF_FALSE",
 		OpGe:          "GE",
+		OpImport:      "IMPORT",
+		OpGetMember:   "GET_MEMBER",
 	}
 	for op, want := range names {
 		if op.String() != want {
@@ -120,6 +122,27 @@ func TestDisassemble(t *testing.T) {
 		"RETURN",
 		"test.spr:2:1",
 		"(42)",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("disassembly missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestDisassembleModuleOpcodes(t *testing.T) {
+	b := NewBuilder("main", "test.spr", nil)
+	p := source.Pos{Line: 1, Column: 1, Offset: 0}
+	importIdx := b.Const(object.Str{Value: "lib/greeting"})
+	b.AddU16(OpImport, importIdx, p)
+	memberIdx := b.Const(object.Str{Value: "hi"})
+	b.AddU16(OpGetMember, memberIdx, p)
+	out := Disassemble(b.Finish())
+
+	for _, want := range []string{
+		"IMPORT",
+		"lib/greeting",
+		"GET_MEMBER",
+		"hi",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("disassembly missing %q:\n%s", want, out)

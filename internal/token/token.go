@@ -33,6 +33,8 @@ const (
 	RETURN
 	BREAK
 	CONTINUE
+	IMPORT
+	AS
 	TRUE
 	FALSE
 	NIL
@@ -62,6 +64,7 @@ const (
 	RBRACE   // }
 	COMMA    // ,
 	COLON    // :
+	DOT      // .
 )
 
 var keywords = map[string]Kind{
@@ -77,6 +80,8 @@ var keywords = map[string]Kind{
 	"return":   RETURN,
 	"break":    BREAK,
 	"continue": CONTINUE,
+	"import":   IMPORT,
+	"as":       AS,
 	"true":     TRUE,
 	"false":    FALSE,
 	"nil":      NIL,
@@ -142,6 +147,10 @@ func (k Kind) String() string {
 		return "break"
 	case CONTINUE:
 		return "continue"
+	case IMPORT:
+		return "import"
+	case AS:
+		return "as"
 	case TRUE:
 		return "true"
 	case FALSE:
@@ -196,6 +205,8 @@ func (k Kind) String() string {
 		return ","
 	case COLON:
 		return ":"
+	case DOT:
+		return "."
 	}
 	return fmt.Sprintf("token(%d)", int(k))
 }

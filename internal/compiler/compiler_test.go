@@ -6,6 +6,7 @@ import (
 
 	"github.com/sprout-lang/sprout/internal/code"
 	"github.com/sprout-lang/sprout/internal/diag"
+	"github.com/sprout-lang/sprout/internal/object"
 	"github.com/sprout-lang/sprout/internal/parser"
 	"github.com/sprout-lang/sprout/internal/source"
 )
@@ -47,7 +48,8 @@ func nextOffset(b []byte, ip int) int {
 		return ip + 2
 	case code.OpPushConst, code.OpNewEnv, code.OpGetLocal, code.OpSetLocal,
 		code.OpBuiltin, code.OpClosure, code.OpJump, code.OpJumpIfFalse,
-		code.OpJumpIfTrue, code.OpBuildList, code.OpBuildMap, code.OpIterNext:
+		code.OpJumpIfTrue, code.OpBuildList, code.OpBuildMap, code.OpIterNext,
+		code.OpGetMember, code.OpImport:
 		return ip + 3
 	default:
 		return ip + 1
@@ -314,6 +316,53 @@ print(fib(10))
 	}
 	if got := opCount(t, fib, code.OpGetUp); got < 1 {
 		t.Errorf("fib should read itself as an upvalue, got %d", got)
+	}
+}
+
+func TestCompileImport(t *testing.T) {
+	p, err := compileSrc(t, `import "lib/greeting"
+print(greeting.hi)
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	main := p.Main
+	if got := opCount(t, main, code.OpImport); got != 1 {
+		t.Errorf("import count: %d", got)
+	}
+	if got := opCount(t, main, code.OpGetMember); got != 1 {
+		t.Errorf("get member count: %d", got)
+	}
+	// The import binds a name, so a set local must store the module.
+	if got := opCount(t, main, code.OpSetLocal); got != 1 {
+		t.Errorf("set local count: %d", got)
+	}
+	// The entry function must expose the imported name as an export slot.
+	if slot, ok := main.Exports["greeting"]; !ok || slot != 0 {
+		t.Errorf("export slot for greeting: %d, ok=%v", slot, ok)
+	}
+}
+
+func TestCompileMemberAccess(t *testing.T) {
+	p, err := compileSrc(t, `let g = fn() { return 1 }
+print(g.x)
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	main := p.Main
+	if got := opCount(t, main, code.OpGetMember); got != 1 {
+		t.Errorf("get member count: %d", got)
+	}
+	// The member name must sit in the constant pool.
+	found := false
+	for _, c := range main.Consts {
+		if s, ok := c.(object.Str); ok && s.Value == "x" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("member name not found in the constant pool")
 	}
 }
 

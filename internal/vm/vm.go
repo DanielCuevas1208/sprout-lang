@@ -16,9 +16,13 @@ import (
 	"os"
 	"strings"
 
+	"github.com/sprout-lang/sprout/internal/checker"
 	"github.com/sprout-lang/sprout/internal/code"
+	"github.com/sprout-lang/sprout/internal/compiler"
 	"github.com/sprout-lang/sprout/internal/diag"
+	"github.com/sprout-lang/sprout/internal/module"
 	"github.com/sprout-lang/sprout/internal/object"
+	"github.com/sprout-lang/sprout/internal/parser"
 	"github.com/sprout-lang/sprout/internal/runtime"
 	"github.com/sprout-lang/sprout/internal/source"
 )
@@ -98,6 +102,7 @@ type VM struct {
 	ctx    runtime.Context
 	stack  []object.Object
 	frames []*frame
+	loader *module.Loader
 }
 
 // New returns a VM wired to the process standard streams.
@@ -116,8 +121,14 @@ func NewWithIO(stdin io.Reader, stdout, stderr io.Writer) *VM {
 			return vm.callValue(fn, args, pos)
 		},
 	}
+	vm.loader = module.NewLoader(module.OS{})
 	return vm
 }
+
+// SetLoader replaces the module loader used by the VM.
+//
+// Tests use this to point the VM at an in-memory filesystem.
+func (vm *VM) SetLoader(l *module.Loader) { vm.loader = l }
 
 // Run executes the compiled program.
 //
@@ -218,6 +229,110 @@ func (vm *VM) callValue(callee object.Object, args []object.Object, pos source.P
 	}
 	vm.failAtPos(fmt.Sprintf("cannot call a %s", callee.Type()), pos)
 	return nil
+}
+
+// loadModule resolves, runs, and caches the module named by spec.
+//
+// The importer is the path of the file that holds the import statement.
+// On failure it returns a vmErr ready to raise at the import site.
+func (vm *VM) loadModule(importer, spec string, pos source.Pos) (m *object.Module, verr *vmErr) {
+	path, ok := vm.loader.Resolve(importer, spec)
+	if !ok {
+		return nil, &vmErr{msg: fmt.Sprintf("cannot find module '%s'", spec), pos: pos}
+	}
+	if cached, ok := vm.loader.Cached(path); ok {
+		return cached, nil
+	}
+	if !vm.loader.MarkLoading(path) {
+		return nil, &vmErr{msg: fmt.Sprintf("circular import of module '%s'", spec), pos: pos}
+	}
+	defer vm.loader.DoneLoading(path)
+
+	file, err := vm.loader.Source(path)
+	if err != nil {
+		return nil, &vmErr{msg: fmt.Sprintf("cannot load module '%s': %v", spec, err), pos: pos}
+	}
+	prog, diags := parser.Parse(file)
+	if msg := firstDiagMessage(diags); msg != "" {
+		return nil, &vmErr{msg: fmt.Sprintf("cannot load module '%s': %s (at %s)", spec, msg, path), pos: pos}
+	}
+	if diags := checker.Check(file, prog); len(diags) > 0 {
+		d := diags[0]
+		return nil, &vmErr{msg: fmt.Sprintf("cannot load module '%s': %s (at %s:%d:%d)",
+			spec, d.Message, path, d.Pos.Line, d.Pos.Column), pos: pos}
+	}
+	compiled, err := compiler.Compile(file, prog)
+	if err != nil {
+		return nil, &vmErr{msg: fmt.Sprintf("cannot load module '%s': %s", spec, err.Error()), pos: pos}
+	}
+
+	env, _, merr := vm.runModule(file, compiled.Main)
+	if merr != nil {
+		return nil, &vmErr{
+			msg:    fmt.Sprintf("cannot load module '%s': %s", spec, moduleAt(path, merr.pos, merr.msg)),
+			pos:    pos,
+			frames: merr.frames,
+		}
+	}
+
+	name, ok := vm.loader.Name(path)
+	if !ok {
+		return nil, &vmErr{msg: fmt.Sprintf("cannot load module '%s': invalid module name", spec), pos: pos}
+	}
+	mod := object.NewModule(name, path)
+	for _, ename := range module.Exports(prog) {
+		slot, ok := compiled.Main.Exports[ename]
+		if !ok {
+			return nil, &vmErr{msg: fmt.Sprintf("cannot load module '%s': internal error: missing export '%s'", spec, ename), pos: pos}
+		}
+		mod.Set(ename, env.slots[slot])
+	}
+	vm.loader.Cache(path, mod)
+	return mod, nil
+}
+
+// runModule executes a module's entry function on the shared stack.
+//
+// The module runs like a nested call. The returned environment holds the
+// module's top-level slots so the caller can collect its exports. On a
+// runtime failure the returned error keeps only the frames that were pushed
+// inside the module, matching the interpreter's module error traces.
+func (vm *VM) runModule(file *source.File, main *code.Function) (env *Env, val object.Object, verr *vmErr) {
+	env = &Env{slots: make([]object.Object, main.NumSlots)}
+	before := len(vm.frames)
+	vm.frames = append(vm.frames, &frame{fn: main, env: env, ip: 0, base: len(vm.stack)})
+	defer func() {
+		if r := recover(); r != nil {
+			if e, ok := r.(*vmErr); ok {
+				if len(e.frames) >= before {
+					e.frames = e.frames[before:]
+				}
+				verr = e
+				return
+			}
+			panic(r)
+		}
+	}()
+	val = vm.runFrames(before)
+	return env, val, nil
+}
+
+// firstDiagMessage returns the message of the first error diagnostic.
+func firstDiagMessage(diags []diag.Diagnostic) string {
+	for _, d := range diags {
+		if d.Severity == diag.SeverityError {
+			return d.Message
+		}
+	}
+	return ""
+}
+
+// moduleAt renders a module error detail with its source position.
+func moduleAt(path string, pos source.Pos, msg string) string {
+	if pos.IsValid() {
+		return fmt.Sprintf("%s (at %s:%d:%d)", msg, path, pos.Line, pos.Column)
+	}
+	return msg
 }
 
 // runFrames executes instructions until the frame stack reaches until.
@@ -341,6 +456,27 @@ func (vm *VM) runFrames(until int) object.Object {
 				vm.failAtPos(err.Error(), pos)
 			}
 			vm.push(v)
+		case code.OpGetMember:
+			pos := fr.pos()
+			idx := code.U16(fn.Code, fr.ip+1)
+			fr.ip += 3
+			name := fn.Consts[idx].(object.Str).Value
+			container := vm.pop()
+			v, err := runtime.MemberGet(container, name)
+			if err != nil {
+				vm.failAtPos(err.Error(), pos)
+			}
+			vm.push(v)
+		case code.OpImport:
+			pos := fr.pos()
+			idx := code.U16(fn.Code, fr.ip+1)
+			fr.ip += 3
+			spec := fn.Consts[idx].(object.Str).Value
+			m, lerr := vm.loadModule(fn.FileName, spec, pos)
+			if lerr != nil {
+				panic(lerr)
+			}
+			vm.push(m)
 		case code.OpBuildList:
 			n := int(code.U16(fn.Code, fr.ip+1))
 			elems := make([]object.Object, n)

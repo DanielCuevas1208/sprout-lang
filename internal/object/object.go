@@ -20,6 +20,7 @@ const (
 	TypeMap      Type = "map"
 	TypeFunction Type = "function"
 	TypeRange    Type = "range"
+	TypeModule   Type = "module"
 )
 
 func (t Type) String() string { return string(t) }
@@ -177,6 +178,45 @@ func (r Range) String() string {
 	}
 	return fmt.Sprintf("range(%d, %d, %d)", r.Start, r.End, r.Step)
 }
+
+// Module is a loaded Sprout module.
+//
+// A module exposes its top-level declarations as named members. Member names
+// keep their declaration order so output stays deterministic.
+type Module struct {
+	Name  string
+	Path  string
+	order []string
+	vals  map[string]Object
+}
+
+// NewModule returns a module with the given display name and source path.
+func NewModule(name, path string) *Module {
+	return &Module{Name: name, Path: path, vals: make(map[string]Object)}
+}
+
+// Type reports the runtime type of a module.
+func (m *Module) Type() Type { return TypeModule }
+
+// String renders a module for display.
+func (m *Module) String() string { return "<module " + m.Name + ">" }
+
+// Set binds name to value, preserving declaration order.
+func (m *Module) Set(name string, value Object) {
+	if _, ok := m.vals[name]; !ok {
+		m.order = append(m.order, name)
+	}
+	m.vals[name] = value
+}
+
+// Get returns the value bound to name.
+func (m *Module) Get(name string) (Object, bool) {
+	v, ok := m.vals[name]
+	return v, ok
+}
+
+// Keys returns the member names in declaration order.
+func (m *Module) Keys() []string { return m.order }
 
 // Repr renders o in a form that is close to its source literal.
 func Repr(o Object) string {

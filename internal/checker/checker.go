@@ -10,7 +10,7 @@ import (
 
 	"github.com/sprout-lang/sprout/internal/ast"
 	"github.com/sprout-lang/sprout/internal/diag"
-	"github.com/sprout-lang/sprout/internal/interp"
+	"github.com/sprout-lang/sprout/internal/runtime"
 	"github.com/sprout-lang/sprout/internal/source"
 	"github.com/sprout-lang/sprout/internal/token"
 )
@@ -22,6 +22,7 @@ const (
 	symConst
 	symFunc
 	symParam
+	symModule
 )
 
 type symbol struct {
@@ -57,8 +58,8 @@ type checker struct {
 var builtinNames = buildBuiltinSet()
 
 func buildBuiltinSet() map[string]bool {
-	set := make(map[string]bool, len(interp.BuiltinNames))
-	for _, n := range interp.BuiltinNames {
+	set := make(map[string]bool, len(runtime.Names))
+	for _, n := range runtime.Names {
 		set[n] = true
 	}
 	return set
@@ -137,6 +138,11 @@ func (c *checker) checkStmt(s ast.Stmt, sc *scope) {
 		if c.loopDepth == 0 {
 			c.errorf(n.Position, "'continue' can only appear inside a loop")
 		}
+	case *ast.ImportStmt:
+		if c.funcDepth > 0 {
+			c.errorf(n.ImportPos, "'import' can only appear at the top level")
+		}
+		c.declare(sc, n.Name.Name, symModule, n.Name.Position, "")
 	case *ast.ExprStmt:
 		c.checkExpr(n.X, sc)
 	}
@@ -239,10 +245,15 @@ func (c *checker) checkExpr(e ast.Expr, sc *scope) {
 				}
 			} else if sym.kind == symConst {
 				c.errorf(t.Position, "cannot assign to constant '%s'", t.Name)
+			} else if sym.kind == symModule {
+				c.errorf(t.Position, "cannot assign to module '%s'", t.Name)
 			}
 		case *ast.IndexExpr:
 			c.checkExpr(t.X, sc)
 			c.checkExpr(t.Index, sc)
+		case *ast.MemberExpr:
+			c.checkExpr(t.X, sc)
+			c.errorf(t.Pos(), "cannot assign to a module member")
 		default:
 			c.errorf(t.Pos(), "cannot assign to this expression")
 		}
@@ -255,6 +266,8 @@ func (c *checker) checkExpr(e ast.Expr, sc *scope) {
 	case *ast.IndexExpr:
 		c.checkExpr(n.X, sc)
 		c.checkExpr(n.Index, sc)
+	case *ast.MemberExpr:
+		c.checkExpr(n.X, sc)
 	case *ast.UnaryExpr:
 		c.checkExpr(n.X, sc)
 	case *ast.BinaryExpr:

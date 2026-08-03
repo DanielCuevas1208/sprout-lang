@@ -44,10 +44,12 @@ const (
 	OpJumpIfTrue  // uint16 target: pop, jump when truthy
 	OpGetIndex    // pop index and container, push element
 	OpSetIndex    // pop value, index, and container, push value
+	OpGetMember   // uint16 const index: pop a container, push a named member
 	OpBuildList   // uint16 count: collect count values into a list
 	OpBuildMap    // uint16 count: collect count key/value pairs into a map
 	OpMakeIter    // pop an iterable, push an iterator
 	OpIterNext    // uint16 target: advance; jump when the iteration ends
+	OpImport      // uint16 const index: load a module by path, push it
 	OpNeg
 	OpNot
 	OpAdd
@@ -88,10 +90,12 @@ var opNames = map[Opcode]string{
 	OpJumpIfTrue:  "JUMP_IF_TRUE",
 	OpGetIndex:    "GET_INDEX",
 	OpSetIndex:    "SET_INDEX",
+	OpGetMember:   "GET_MEMBER",
 	OpBuildList:   "BUILD_LIST",
 	OpBuildMap:    "BUILD_MAP",
 	OpMakeIter:    "MAKE_ITER",
 	OpIterNext:    "ITER_NEXT",
+	OpImport:      "IMPORT",
 	OpNeg:         "NEG",
 	OpNot:         "NOT",
 	OpAdd:         "ADD",
@@ -129,6 +133,9 @@ type Function struct {
 	// Positions tracks the source position of each instruction.
 	// Positions[offset] is valid only where an instruction starts.
 	Positions []source.Pos
+	// Exports maps a top-level name to its slot in the entry function.
+	// Only the compiled entry function of a module uses this field.
+	Exports map[string]int
 }
 
 // Type reports the runtime type of a compiled function.
@@ -270,6 +277,10 @@ func (d *disassembler) instruction(ip int) (int, bool) {
 		return ip + 3, true
 	case OpNewEnv, OpGetLocal, OpSetLocal, OpBuildList, OpBuildMap:
 		fmt.Fprintf(&d.b, "  %d", U16(d.fn.Code, ip+1))
+		return ip + 3, true
+	case OpGetMember, OpImport:
+		idx := U16(d.fn.Code, ip+1)
+		fmt.Fprintf(&d.b, "  %d  (%s)", idx, d.fn.Consts[idx])
 		return ip + 3, true
 	case OpGetUp, OpSetUp:
 		fmt.Fprintf(&d.b, "  depth %d slot %d", U16(d.fn.Code, ip+1), U16(d.fn.Code, ip+3))

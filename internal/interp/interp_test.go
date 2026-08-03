@@ -4,6 +4,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/sprout-lang/sprout/internal/checker"
+	"github.com/sprout-lang/sprout/internal/diag"
+	"github.com/sprout-lang/sprout/internal/module"
 	"github.com/sprout-lang/sprout/internal/parser"
 	"github.com/sprout-lang/sprout/internal/source"
 )
@@ -364,4 +367,144 @@ print([1, "a", true, nil, 2.5])
 print({"k": [1, 2]})
 print(range(0, 3))
 `, "[1, a, true, nil, 2.5]\n{k: [1, 2]}\nrange(0, 3)\n")
+}
+
+// runModules runs src with an in-memory module filesystem.
+//
+// The main file is named main.spr, so imports resolve relative to it.
+func runModules(src string, files map[string]string) (string, *RunError) {
+	fs := module.NewMemFS()
+	for name, text := range files {
+		fs.Add(name, text)
+	}
+	io := &testIO{}
+	iv := NewWithIO(strings.NewReader(""), &io.out, &io.err)
+	iv.SetLoader(module.NewLoader(fs))
+	file := source.NewFile("main.spr", src)
+	prog, diags := parser.Parse(file)
+	for _, d := range diags {
+		if d.Severity == diag.SeverityError {
+			return "", &RunError{Message: "parse error: " + d.Message}
+		}
+	}
+	if cdiags := checker.Check(file, prog); len(cdiags) > 0 {
+		return "", &RunError{Message: "check error: " + cdiags[0].Message}
+	}
+	_, rerr := iv.Exec(file, prog)
+	return io.out.String(), rerr
+}
+
+func expectModuleOutput(t *testing.T, src string, files map[string]string, want string) {
+	t.Helper()
+	got, rerr := runModules(src, files)
+	if rerr != nil {
+		t.Fatalf("module run %q: runtime error: %s", src, rerr.Message)
+	}
+	if got != want {
+		t.Errorf("module run %q:\n got: %q\nwant: %q", src, got, want)
+	}
+}
+
+func expectModuleError(t *testing.T, src string, files map[string]string, want string) {
+	t.Helper()
+	_, rerr := runModules(src, files)
+	if rerr == nil {
+		t.Fatalf("module run %q: expected error containing %q, got none", src, want)
+	}
+	if !strings.Contains(rerr.Message, want) {
+		t.Errorf("module run %q: error %q does not contain %q", src, rerr.Message, want)
+	}
+}
+
+func TestImportModule(t *testing.T) {
+	expectModuleOutput(t, `
+import "lib/greeting"
+print(greeting.hi("world"))
+print(greeting.pi)
+print(type(greeting))
+`, map[string]string{
+		"lib/greeting.spr": "let pi = 3.14\nfn hi(name) { return \"hello, \" + name }\n",
+	}, "hello, world\n3.14\nmodule\n")
+}
+
+func TestImportAlias(t *testing.T) {
+	expectModuleOutput(t, `
+import "lib/greeting" as g
+print(g.hi("sprout"))
+`, map[string]string{
+		"lib/greeting.spr": "fn hi(name) { return \"hi, \" + name }\n",
+	}, "hi, sprout\n")
+}
+
+func TestModuleChainedImports(t *testing.T) {
+	expectModuleOutput(t, `
+import "lib/outer"
+print(outer.value)
+`, map[string]string{
+		"lib/outer.spr": "import \"inner\"\nlet value = inner.n + 1\n",
+		"lib/inner.spr": "let n = 41\n",
+	}, "42\n")
+}
+
+func TestModuleCached(t *testing.T) {
+	expectModuleOutput(t, `
+import "counter"
+let first = counter.next()
+let second = counter.next()
+print(first, second)
+`, map[string]string{
+		"counter.spr": "let count = 0\nfn next() {\n\tcount = count + 1\n\treturn count\n}\n",
+	}, "1 2\n")
+}
+
+func TestModuleClosureFromModule(t *testing.T) {
+	expectModuleOutput(t, `
+import "factory"
+let next = factory.make()
+print(next())
+print(next())
+`, map[string]string{
+		"factory.spr": "fn make() {\n\tlet count = 0\n\treturn fn() {\n\t\tcount = count + 1\n\t\treturn count\n\t}\n}\n",
+	}, "1\n2\n")
+}
+
+func TestModuleMissingMember(t *testing.T) {
+	expectModuleError(t, `
+import "greeting"
+print(greeting.missing)
+`, map[string]string{
+		"greeting.spr": "let pi = 3.14\n",
+	}, "has no member 'missing'")
+}
+
+func TestModuleMissingFile(t *testing.T) {
+	expectModuleError(t, `import "missing"`, map[string]string{}, "cannot find module 'missing'")
+}
+
+func TestModuleCircularImport(t *testing.T) {
+	expectModuleError(t, `import "a"`, map[string]string{
+		"a.spr": "import \"b\"\nlet x = 1\n",
+		"b.spr": "import \"a\"\nlet y = 2\n",
+	}, "circular import")
+}
+
+func TestModuleRuntimeError(t *testing.T) {
+	expectModuleError(t, `
+import "boom"
+print("after")
+`, map[string]string{
+		"boom.spr": "let x = 1 / 0\n",
+	}, "cannot load module 'boom': cannot divide by zero")
+}
+
+func TestModuleParseError(t *testing.T) {
+	expectModuleError(t, `import "bad"`, map[string]string{
+		"bad.spr": "let x =\n",
+	}, "cannot load module 'bad'")
+}
+
+func TestModuleCheckError(t *testing.T) {
+	expectModuleError(t, `import "bad"`, map[string]string{
+		"bad.spr": "print(undefined_name)\n",
+	}, "undefined name 'undefined_name'")
 }

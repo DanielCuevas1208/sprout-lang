@@ -53,6 +53,8 @@ It records these fields.
 The compiler stores a nested function in the enclosing pool.
 A closure instruction captures the current environment.
 The VM wraps a function and its environment into a closure value.
+The entry function of a module records its name-to-slot map.
+The VM uses the map to collect the module exports after it runs.
 
 ## Scope model
 
@@ -97,10 +99,12 @@ This matches the interpreter, so closures see their own copy.
 | JUMP_IF_TRUE | target | Pop, jump when truthy. |
 | GET_INDEX | none | Pop index and container. |
 | SET_INDEX | none | Pop value, index, and container. |
+| GET_MEMBER | index | Pop a container, push a named member. |
 | BUILD_LIST | count | Build a list. |
 | BUILD_MAP | count | Build a map. |
 | MAKE_ITER | none | Pop an iterable, push an iterator. |
 | ITER_NEXT | target | Advance, jump when done. |
+| IMPORT | index | Load a module by path, push it. |
 | NEG | none | Negate the top. |
 | NOT | none | Invert the truthiness. |
 | ADD | none | Add the top two values. |
@@ -137,6 +141,18 @@ This guarantees identical results.
 The runtime covers arithmetic, comparison, indexing, and iteration.
 It also owns the standard library.
 A builtin is a runtime value with a name and a Go function.
+
+## Modules
+
+The IMPORT instruction loads a module by path.
+The compiler puts the path string in the constant pool.
+The VM resolves the path relative to the current function file.
+
+Each module compiles to its own entry function.
+The VM runs that function on the shared stack.
+The top-level slots become the module exports.
+The runtime caches each module by resolved path.
+Both engines share the same resolution rules.
 
 ## Errors
 
