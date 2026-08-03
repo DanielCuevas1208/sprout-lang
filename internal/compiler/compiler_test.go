@@ -46,8 +46,9 @@ func nextOffset(b []byte, ip int) int {
 	case code.OpCall:
 		return ip + 2
 	case code.OpPushConst, code.OpNewEnv, code.OpGetLocal, code.OpSetLocal,
-		code.OpBuiltin, code.OpClosure, code.OpJump, code.OpJumpIfFalse,
-		code.OpJumpIfTrue, code.OpBuildList, code.OpBuildMap, code.OpIterNext:
+		code.OpBuiltin, code.OpClosure, code.OpImport, code.OpGetMember,
+		code.OpJump, code.OpJumpIfFalse, code.OpJumpIfTrue, code.OpBuildList,
+		code.OpBuildMap, code.OpIterNext:
 		return ip + 3
 	default:
 		return ip + 1
@@ -330,5 +331,63 @@ func TestCompileASTPositionsTracked(t *testing.T) {
 			t.Errorf("missing position for instruction at offset %d", ip)
 		}
 		ip = nextOffset(main.Code, ip)
+	}
+}
+
+func TestCompileImport(t *testing.T) {
+	p, err := compileSrc(t, `import "./math"
+print(math.square(5))
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	main := p.Main
+	if got := opCount(t, main, code.OpImport); got != 1 {
+		t.Errorf("import count: %d", got)
+	}
+	if got := opCount(t, main, code.OpGetMember); got != 1 {
+		t.Errorf("member count: %d", got)
+	}
+	// The import binds a constant, so the name cannot be reassigned.
+	if _, err := compileSrc(t, `import "./m"
+m = 1`); err == nil {
+		t.Fatal("expected a compile error for reassigning an import")
+	}
+}
+
+func TestCompileMember(t *testing.T) {
+	p, err := compileSrc(t, `import "./util"
+print(util.shout("hi"))
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := opCount(t, p.Main, code.OpGetMember); got != 1 {
+		t.Errorf("member count: %d", got)
+	}
+}
+
+func TestCompileExports(t *testing.T) {
+	p, err := compileSrc(t, `export fn f() { return 1 }
+export let x = 2
+let y = 3
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exports := p.Main.Exports
+	if len(exports) != 2 {
+		t.Fatalf("export count: %d", len(exports))
+	}
+	// Function names are pre-declared, so f owns slot 0. The let binds the
+	// next slot.
+	if slot, ok := exports["f"]; !ok || slot != 0 {
+		t.Errorf("f export slot: %d, %v", slot, ok)
+	}
+	if slot, ok := exports["x"]; !ok || slot != 1 {
+		t.Errorf("x export slot: %d, %v", slot, ok)
+	}
+	if _, ok := exports["y"]; ok {
+		t.Error("y must not be exported")
 	}
 }

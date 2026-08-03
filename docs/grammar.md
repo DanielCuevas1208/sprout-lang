@@ -1,6 +1,6 @@
 # Sprout Grammar
 
-This document is the formal grammar of Sprout version 0.2.
+This document is the formal grammar of Sprout version 0.3.
 
 ## Notation
 
@@ -39,11 +39,25 @@ A floating-point literal needs a digit before the decimal point.
 
 ```
 program       := statement*
-statement     := let_decl | const_decl | fn_decl
+statement     := import_stmt | export_decl | let_decl | const_decl
+               | fn_decl
                | if_stmt | while_stmt | for_stmt
                | return_stmt | break_stmt | continue_stmt
                | expr_stmt
 ```
+
+## Modules
+
+```
+import_stmt   := "import" string ["as" identifier]
+export_decl   := "export" (let_decl | const_decl | fn_decl)
+```
+
+The `export` modifier marks a top-level declaration as public.
+A private name is visible only inside its own module.
+An import path resolves against the importing file.
+The `as` clause chooses the bound name.
+Without it, the last path segment is the bound name.
 
 ## Declarations
 
@@ -105,7 +119,11 @@ map_lit       := "{" [ map_entry {"," map_entry} [","] ] "}"
 map_entry     := expr ":" expr
 call          := primary "(" [ expr {"," expr} [","] ] ")"
 index         := primary "[" expr "]"
+member        := primary "." identifier
 ```
+
+A member read applies only to modules.
+The checker rejects a member read on a value that is never a module.
 
 ## Precedence table
 
@@ -120,7 +138,7 @@ index         := primary "[" expr "]"
 | 7     | `*` `/` `%` | left        |
 | 8     | `-` `not` (prefix) | right |
 | 9     | `^`       | right         |
-| 10    | call, index | left       |
+| 10    | call, index, member | left |
 
 ## Line continuation
 

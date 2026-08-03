@@ -40,14 +40,14 @@ func TestBasicTokens(t *testing.T) {
 }
 
 func TestAllOperators(t *testing.T) {
-	toks := lex("== != < <= > >= = + - * / % ^ ( ) [ ] { } , :\n")
+	toks := lex("== != < <= > >= = + - * / % ^ ( ) [ ] { } , : .\n")
 	got := kinds(toks)
 	want := []token.Kind{
 		token.EQ, token.NEQ, token.LT, token.LE, token.GT, token.GE,
 		token.ASSIGN, token.PLUS, token.MINUS, token.STAR, token.SLASH,
 		token.PERCENT, token.CARET, token.LPAREN, token.RPAREN,
 		token.LBRACKET, token.RBRACKET, token.LBRACE, token.RBRACE,
-		token.COMMA, token.COLON, token.NEWLINE, token.EOF,
+		token.COMMA, token.COLON, token.DOT, token.NEWLINE, token.EOF,
 	}
 	if len(got) != len(want) {
 		t.Fatalf("token count: got %d, want %d\n%v", len(got), len(want), got)
@@ -60,14 +60,14 @@ func TestAllOperators(t *testing.T) {
 }
 
 func TestKeywords(t *testing.T) {
-	src := "let const fn if elif else for in while return break continue true false nil and or not\n"
+	src := "let const fn if elif else for in while return break continue true false nil and or not import export\n"
 	toks := lex(src)
 	got := kinds(toks)
 	want := []token.Kind{
 		token.LET, token.CONST, token.FN, token.IF, token.ELIF, token.ELSE,
 		token.FOR, token.IN, token.WHILE, token.RETURN, token.BREAK,
 		token.CONTINUE, token.TRUE, token.FALSE, token.NIL, token.AND,
-		token.OR, token.NOT, token.NEWLINE, token.EOF,
+		token.OR, token.NOT, token.IMPORT, token.EXPORT, token.NEWLINE, token.EOF,
 	}
 	if len(got) != len(want) {
 		t.Fatalf("token count: got %d, want %d\n%v", len(got), len(want), got)
@@ -179,7 +179,7 @@ func TestErrors(t *testing.T) {
 		{"/* never closed", "unterminated block comment"},
 		{`let x = #`, "unexpected character"},
 		{`1e`, "expected digits in exponent"},
-		{`5.`, "unexpected character"},
+		{`let x = $`, "unexpected character"},
 	}
 	for _, c := range cases {
 		msgs := lexErrors(c.src)

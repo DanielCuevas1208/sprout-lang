@@ -99,3 +99,46 @@ func TestClosureCapture(t *testing.T) {
 	expectClean(t, "let count = 0\nfn bump() { count = count + 1 }\nbump()")
 	expectError(t, "fn outer() { fn inner() { return secret } }", "undefined name 'secret'")
 }
+
+func TestModules(t *testing.T) {
+	expectClean(t, `import "greet"
+print(greet.hello("world"))`)
+	expectClean(t, `import "./lib/util"
+print(util.shout("hi"))`)
+	expectClean(t, `import "x" as alias
+print(alias.foo)`)
+
+	// Without a resolver the checker binds imports but cannot inspect them.
+	// A member read is left to the runtime.
+	expectClean(t, `import "anything"
+print(anything.member)`)
+
+	// An import binds a name that cannot be reassigned.
+	expectError(t, `import "greet"
+greet = 1`, "cannot assign to an imported module")
+
+	// Import names cannot collide with other declarations.
+	expectError(t, `import "greet"
+let greet = 2`, "duplicate declaration")
+}
+
+func TestExports(t *testing.T) {
+	expectClean(t, "export let count = 0")
+	expectClean(t, "export const PI = 3.14")
+	expectClean(t, "export fn hello(name) { return name }")
+	expectClean(t, "export let count = 0\nlet other = 1")
+	expectError(t, "fn f() { export let x = 1 }", "'export' can only appear at the top level")
+	expectError(t, "if true { export let x = 1 }", "'export' can only appear at the top level")
+	expectError(t, "let f = fn() { export let x = 1 }", "'export' can only appear at the top level")
+}
+
+func TestMemberReads(t *testing.T) {
+	// A literal base is never a module.
+	expectError(t, "print(5.size)", "cannot read a member of a int")
+	expectError(t, `print("hi".size)`, "cannot read a member of a string")
+	expectError(t, "print([1].size)", "cannot read a member of a list")
+
+	// A literal initializer gives the name a known type.
+	expectError(t, "let x = 5\nprint(x.size)", "cannot read a member of a int")
+	expectClean(t, "let x = fn() { return 1 }\nprint(x.y)") // function type is dynamic
+}

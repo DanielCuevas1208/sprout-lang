@@ -1,0 +1,9 @@
+// Simple arithmetic helpers.
+
+export fn square(n) {
+    return n * n
+}
+
+export fn cube(n) {
+    return n * n * n
+}

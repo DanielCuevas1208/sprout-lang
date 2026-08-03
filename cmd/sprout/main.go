@@ -2,19 +2,23 @@
 package main
 
 import (
+	"bytes"
 	"flag"
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/sprout-lang/sprout/internal/ast"
 	"github.com/sprout-lang/sprout/internal/checker"
 	"github.com/sprout-lang/sprout/internal/code"
+	"github.com/sprout-lang/sprout/internal/codec"
 	"github.com/sprout-lang/sprout/internal/compiler"
 	"github.com/sprout-lang/sprout/internal/diag"
 	"github.com/sprout-lang/sprout/internal/interp"
 	"github.com/sprout-lang/sprout/internal/lexer"
+	"github.com/sprout-lang/sprout/internal/mod"
 	"github.com/sprout-lang/sprout/internal/parser"
 	"github.com/sprout-lang/sprout/internal/repl"
 	"github.com/sprout-lang/sprout/internal/source"
@@ -22,7 +26,7 @@ import (
 	"github.com/sprout-lang/sprout/internal/vm"
 )
 
-const version = "0.2.0"
+const version = "0.3.0"
 
 func main() {
 	os.Exit(run(os.Args[1:]))
@@ -39,6 +43,8 @@ func run(args []string) int {
 		return runVM(args[1:])
 	case "dis":
 		return runDis(args[1:])
+	case "build":
+		return runBuild(args[1:])
 	case "repl":
 		return runRepl()
 	case "lex":
@@ -71,11 +77,15 @@ func usage(w io.Writer) {
 	fmt.Fprintln(w, "  sprout run <file.spr>      run a program on the interpreter")
 	fmt.Fprintln(w, "  sprout vm <file.spr>       run a program on the bytecode VM")
 	fmt.Fprintln(w, "  sprout dis <file.spr>      show the compiled bytecode")
+	fmt.Fprintln(w, "  sprout build <file.spr>    build a bytecode artifact")
 	fmt.Fprintln(w, "  sprout repl                start an interactive session")
 	fmt.Fprintln(w, "  sprout lex <file.spr>      show the tokens of a file")
 	fmt.Fprintln(w, "  sprout parse <file.spr>    show the syntax tree of a file")
 	fmt.Fprintln(w, "  sprout check <file.spr>    check a file without running it")
 	fmt.Fprintln(w, "  sprout version             show the version")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "A 'run' or 'build' file may also be a Sprout bytecode artifact.")
+	fmt.Fprintln(w, "Run 'sprout build -h' for the build options.")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Options for run, vm, dis, lex, parse, and check:")
 	fmt.Fprintln(w, "  -color auto|always|never   control colored diagnostics")
@@ -98,22 +108,7 @@ func readSource(path string) (*source.File, int) {
 	return source.NewFile(path, string(text)), 0
 }
 
-// parseCheckArgs reads a file argument and returns a reporter for it.
-//
-// The caller still parses and checks the source. Sharing this step keeps the
-// color flag and file handling identical across the run-style commands.
-func parseCheckArgs(desc string, args []string) (*source.File, *diag.Reporter, int) {
-	path, color, code := parseArgs(desc, args)
-	if code != 0 {
-		return nil, nil, code
-	}
-	file, code := readSource(path)
-	if code != 0 {
-		return nil, nil, code
-	}
-	return file, &diag.Reporter{Color: color}, 0
-}
-
+// parseArgs reads a file argument and the color flag for a command.
 func parseArgs(desc string, args []string) (string, bool, int) {
 	fs := flag.NewFlagSet(desc, flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
@@ -128,18 +123,37 @@ func parseArgs(desc string, args []string) (string, bool, int) {
 	return fs.Arg(0), colorEnabled(*colorMode), 0
 }
 
-func runFile(args []string) int {
-	file, rep, code := parseCheckArgs("run", args)
-	if code != 0 {
-		return code
-	}
+// parseAndCheck parses file and checks it against its module project.
+//
+// It writes any diagnostics and reports whether the program is clean.
+func parseAndCheck(file *source.File, rep *diag.Reporter) (*ast.Program, bool) {
 	prog, diags := parser.Parse(file)
 	if hasErrors(diags) {
 		rep.Write(os.Stderr, diags)
-		return 1
+		return nil, false
 	}
-	if diags := checker.Check(file, prog); hasErrors(diags) {
+	if diags := checker.CheckWith(file, prog, mod.NewResolver()); hasErrors(diags) {
 		rep.Write(os.Stderr, diags)
+		return nil, false
+	}
+	return prog, true
+}
+
+func runFile(args []string) int {
+	path, color, code := parseArgs("run", args)
+	if code != 0 {
+		return code
+	}
+	rep := &diag.Reporter{Color: color}
+	if isArtifact(path) {
+		return runArtifact(path, rep)
+	}
+	file, code := readSource(path)
+	if code != 0 {
+		return code
+	}
+	prog, ok := parseAndCheck(file, rep)
+	if !ok {
 		return 1
 	}
 
@@ -153,17 +167,17 @@ func runFile(args []string) int {
 }
 
 func runVM(args []string) int {
-	file, rep, code := parseCheckArgs("vm", args)
+	path, color, code := parseArgs("vm", args)
 	if code != 0 {
 		return code
 	}
-	prog, diags := parser.Parse(file)
-	if hasErrors(diags) {
-		rep.Write(os.Stderr, diags)
-		return 1
+	rep := &diag.Reporter{Color: color}
+	file, code := readSource(path)
+	if code != 0 {
+		return code
 	}
-	if diags := checker.Check(file, prog); hasErrors(diags) {
-		rep.Write(os.Stderr, diags)
+	prog, ok := parseAndCheck(file, rep)
+	if !ok {
 		return 1
 	}
 
@@ -187,17 +201,17 @@ func runVM(args []string) int {
 }
 
 func runDis(args []string) int {
-	file, rep, code := parseCheckArgs("dis", args)
+	path, color, code := parseArgs("dis", args)
 	if code != 0 {
 		return code
 	}
-	prog, diags := parser.Parse(file)
-	if hasErrors(diags) {
-		rep.Write(os.Stderr, diags)
-		return 1
+	rep := &diag.Reporter{Color: color}
+	file, code := readSource(path)
+	if code != 0 {
+		return code
 	}
-	if diags := checker.Check(file, prog); hasErrors(diags) {
-		rep.Write(os.Stderr, diags)
+	prog, ok := parseAndCheck(file, rep)
+	if !ok {
 		return 1
 	}
 
@@ -288,18 +302,106 @@ func runCheck(args []string) int {
 	}
 	rep := &diag.Reporter{Color: color}
 
-	prog, diags := parser.Parse(file)
-	if hasErrors(diags) {
-		rep.Write(os.Stderr, diags)
+	if _, ok := parseAndCheck(file, rep); !ok {
 		return 1
 	}
-	if diags := checker.Check(file, prog); len(diags) > 0 {
-		rep.Write(os.Stderr, diags)
-		if hasErrors(diags) {
-			return 1
-		}
-	}
 	fmt.Println("ok")
+	return 0
+}
+
+// runBuild compiles a program and its modules into a bytecode artifact.
+func runBuild(args []string) int {
+	fs := flag.NewFlagSet("build", flag.ContinueOnError)
+	fs.SetOutput(os.Stderr)
+	outPath := fs.String("o", "", "write the artifact to this path")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	if fs.NArg() != 1 {
+		fmt.Fprintln(os.Stderr, "sprout: build expects one file")
+		fs.Usage()
+		return 2
+	}
+	inPath, err := filepath.Abs(fs.Arg(0))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "sprout: %v\n", err)
+		return 1
+	}
+	file, code := readSource(inPath)
+	if code != 0 {
+		return code
+	}
+	rep := &diag.Reporter{Color: colorEnabled("auto")}
+	prog, ok := parseAndCheck(file, rep)
+	if !ok {
+		return 1
+	}
+	compiled, err := compiler.Compile(file, prog)
+	if err != nil {
+		rep.Write(os.Stderr, []diag.Diagnostic{{
+			Severity: diag.SeverityError,
+			Message:  err.Error(),
+			File:     file,
+		}})
+		return 1
+	}
+	out := *outPath
+	if out == "" {
+		out = strings.TrimSuffix(inPath, filepath.Ext(inPath)) + ".sprb"
+	}
+	f, err := os.Create(out)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "sprout: cannot create %s: %v\n", out, err)
+		return 1
+	}
+	compiled.Text = file.Text
+	if err := codec.Encode(f, compiled); err != nil {
+		f.Close()
+		fmt.Fprintf(os.Stderr, "sprout: cannot write %s: %v\n", out, err)
+		return 1
+	}
+	if err := f.Close(); err != nil {
+		fmt.Fprintf(os.Stderr, "sprout: cannot write %s: %v\n", out, err)
+		return 1
+	}
+	fmt.Printf("built %s\n", out)
+	return 0
+}
+
+// isArtifact reports whether the file starts with the artifact magic.
+func isArtifact(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	buf := make([]byte, len(codec.Magic))
+	n, _ := io.ReadFull(f, buf)
+	return codec.LooksLike(buf[:n])
+}
+
+// runArtifact runs a serialized bytecode program on the virtual machine.
+//
+// The artifact keeps the source text of the main file so diagnostics keep
+// their source lines. Modules load from the filesystem on demand.
+func runArtifact(path string, rep *diag.Reporter) int {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "sprout: cannot read %s: %v\n", path, err)
+		return 1
+	}
+	prog, err := codec.Decode(bytes.NewReader(data))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "sprout: %s: %v\n", path, err)
+		return 1
+	}
+	file := source.NewFile(prog.Main.FileName, prog.Text)
+	machine := vm.NewWithIO(os.Stdin, os.Stdout, os.Stderr)
+	_, rerr := machine.Run(file, prog)
+	if rerr != nil {
+		printRunError(os.Stderr, rep, rerr.Message, rerr.File, rerr.Pos, rerr.Frames)
+		return 1
+	}
 	return 0
 }
 

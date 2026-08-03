@@ -50,6 +50,7 @@ var precedences = map[token.Kind]int{
 	token.CARET:    precPower,
 	token.LPAREN:   precCall,
 	token.LBRACKET: precCall,
+	token.DOT:      precCall,
 }
 
 // Parser turns tokens into an AST.
@@ -118,12 +119,94 @@ func (p *Parser) parseStatement() ast.Stmt {
 	case token.CONTINUE:
 		p.next()
 		return &ast.ContinueStmt{Position: t.Pos}
+	case token.IMPORT:
+		return p.parseImport()
+	case token.EXPORT:
+		return p.parseExport()
 	case token.RBRACE:
 		return nil
 	case token.EOF:
 		return nil
 	}
 	return p.parseExprStmt()
+}
+
+// parseImport parses "import <string> [as <ident>]".
+func (p *Parser) parseImport() ast.Stmt {
+	kw := p.next() // import
+	if !p.at(token.STRING) {
+		p.errorf(p.cur().Pos, "expected a module path string after 'import', found %s", tokenString(p.cur()))
+		p.recoverStatement()
+		return nil
+	}
+	pathTok := p.next()
+	path := pathTok.Value
+	if path == "" {
+		p.errorf(pathTok.Pos, "module path cannot be empty")
+	}
+
+	name := &ast.Ident{Name: importName(path), Position: pathTok.Pos}
+	if p.at(token.IDENT) {
+		if p.cur().Lexeme != "as" {
+			p.errorf(p.cur().Pos, "expected 'as' or the end of the import, found %s", tokenString(p.cur()))
+			p.recoverStatement()
+			return nil
+		}
+		p.next()
+		name = p.expectIdent("a name after 'as'")
+		if name == nil {
+			return nil
+		}
+	}
+	return &ast.ImportStmt{KwPos: kw.Pos, Path: path, Name: name}
+}
+
+// importName derives the bound name of a module path.
+//
+// It takes the last path segment and drops the ".spr" suffix.
+func importName(path string) string {
+	base := path
+	if i := strings.LastIndexByte(base, '/'); i >= 0 {
+		base = base[i+1:]
+	}
+	if i := strings.LastIndexByte(base, '\\'); i >= 0 {
+		base = base[i+1:]
+	}
+	base = strings.TrimSuffix(base, ".spr")
+	if base == "" {
+		return "mod"
+	}
+	return base
+}
+
+// parseExport parses an "export <decl>" statement.
+func (p *Parser) parseExport() ast.Stmt {
+	p.next() // export
+	if !p.at(token.LET) && !p.at(token.CONST) && !(p.at(token.FN) && p.peek(1).Kind == token.IDENT) {
+		p.errorf(p.cur().Pos, "expected 'let', 'const', or a named 'fn' after 'export', found %s", tokenString(p.cur()))
+		p.recoverStatement()
+		return nil
+	}
+	switch p.cur().Kind {
+	case token.LET:
+		st := p.parseLet(false)
+		if st != nil {
+			st.(*ast.LetStmt).Public = true
+		}
+		return st
+	case token.CONST:
+		st := p.parseLet(true)
+		if st != nil {
+			st.(*ast.LetStmt).Public = true
+		}
+		return st
+	default:
+		st := p.parseFnDecl()
+		if st != nil {
+			st.(*ast.FnStmt).Public = true
+		}
+		return st
+	}
 }
 
 func (p *Parser) parseLet(isConst bool) ast.Stmt {
@@ -326,6 +409,12 @@ func (p *Parser) parseExpression(prec int) ast.Expr {
 			if left == nil {
 				return nil
 			}
+		case token.DOT:
+			// parseMember consumes the '.' itself.
+			left = p.parseMember(left)
+			if left == nil {
+				return nil
+			}
 		default:
 			op := p.next()
 			p.skipNewlines()
@@ -502,6 +591,16 @@ func (p *Parser) parseIndex(x ast.Expr) ast.Expr {
 	p.close()
 	p.next()
 	return &ast.IndexExpr{X: x, Lbracket: open.Pos, Index: idx}
+}
+
+// parseMember parses a dotted member name after the '.' token.
+func (p *Parser) parseMember(x ast.Expr) ast.Expr {
+	dot := p.next() // .
+	name := p.expectIdent("a member name after '.'")
+	if name == nil {
+		return nil
+	}
+	return &ast.MemberExpr{X: x, DotPos: dot.Pos, Name: name}
 }
 
 func (p *Parser) parseList() ast.Expr {

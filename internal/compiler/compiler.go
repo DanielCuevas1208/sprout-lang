@@ -69,6 +69,8 @@ type Compiler struct {
 	loops []loopInfo
 	// builtins maps a standard library name to its index.
 	builtins map[string]uint16
+	// mainExports maps a top-level exported name to its environment slot.
+	mainExports map[string]int
 }
 
 // Compile translates prog into a runnable program.
@@ -86,6 +88,9 @@ func Compile(file *source.File, prog *ast.Program) (p *code.Program, err error) 
 	c.pushFn(code.NewBuilder("<main>", file.Name, nil), newScope(nil))
 	c.compileStmts(prog.Stmts)
 	c.b().Add(code.OpReturn, endPos(prog.Stmts))
+	if len(c.mainExports) > 0 {
+		c.b().SetExports(c.mainExports)
+	}
 	main := c.finishFn()
 	return &code.Program{Main: main}, nil
 }
@@ -163,13 +168,29 @@ func (c *Compiler) enterFn(name string, params []*ast.Param, body *ast.Block) ui
 }
 
 // declare binds name to the next slot in the current scope.
-func (c *Compiler) declare(name string, isConst bool, pos source.Pos) {
+//
+// It returns the assigned slot.
+func (c *Compiler) declare(name string, isConst bool, pos source.Pos) int {
 	sc := c.cur()
 	if _, dup := sc.names[name]; dup {
 		c.failf(pos, "duplicate declaration of '%s'", name)
 	}
-	sc.names[name] = &symbol{slot: sc.nextSlot, isConst: isConst}
+	slot := sc.nextSlot
+	sc.names[name] = &symbol{slot: slot, isConst: isConst}
 	sc.nextSlot++
+	return slot
+}
+
+// recordExport remembers a top-level exported name and its slot. It only
+// fires for the entry function of a module.
+func (c *Compiler) recordExport(name string, slot int) {
+	if len(c.fns) != 1 {
+		return
+	}
+	if c.mainExports == nil {
+		c.mainExports = make(map[string]int)
+	}
+	c.mainExports[name] = slot
 }
 
 // lookup finds name in the scope chain.
@@ -218,7 +239,10 @@ func (c *Compiler) popScope(envOff int, pos source.Pos) {
 func (c *Compiler) compileStmts(stmts []ast.Stmt) {
 	for _, s := range stmts {
 		if fn, ok := s.(*ast.FnStmt); ok {
-			c.declare(fn.Name.Name, true, fn.Name.Position)
+			slot := c.declare(fn.Name.Name, true, fn.Name.Position)
+			if fn.Public {
+				c.recordExport(fn.Name.Name, slot)
+			}
 		}
 	}
 	for _, s := range stmts {
@@ -229,7 +253,10 @@ func (c *Compiler) compileStmts(stmts []ast.Stmt) {
 func (c *Compiler) compileStmt(s ast.Stmt) {
 	switch n := s.(type) {
 	case *ast.LetStmt:
-		c.declare(n.Name.Name, n.IsConst, n.Name.Position)
+		slot := c.declare(n.Name.Name, n.IsConst, n.Name.Position)
+		if n.Public {
+			c.recordExport(n.Name.Name, slot)
+		}
 		if n.Value != nil {
 			c.compileExpr(n.Value)
 		} else {
@@ -241,6 +268,9 @@ func (c *Compiler) compileStmt(s ast.Stmt) {
 		idx := c.enterFn(n.Name.Name, n.Params, n.Body)
 		c.b().AddU16(code.OpClosure, idx, n.FnPos)
 		c.emitSet(n.Name.Name, n.Name.Position)
+
+	case *ast.ImportStmt:
+		c.compileImport(n)
 
 	case *ast.ExprStmt:
 		c.compileExpr(n.X)
@@ -272,6 +302,18 @@ func (c *Compiler) compileStmt(s ast.Stmt) {
 	default:
 		c.failf(s.Pos(), "internal error: unsupported statement")
 	}
+}
+
+// compileImport binds a module path to a name.
+//
+// The OpImport instruction pushes the module value. The SET_LOCAL that
+// follows stores it into the declared slot. Imports are bound as constants,
+// so the checker rejects later assignment.
+func (c *Compiler) compileImport(n *ast.ImportStmt) {
+	c.declare(n.Name.Name, true, n.KwPos)
+	idx := c.b().Const(object.Str{Value: n.Path})
+	c.b().AddU16(code.OpImport, idx, n.KwPos)
+	c.emitSet(n.Name.Name, n.KwPos)
 }
 
 func (c *Compiler) compileIf(n *ast.IfStmt) {
@@ -453,6 +495,11 @@ func (c *Compiler) compileExpr(e ast.Expr) {
 		c.compileExpr(n.X)
 		c.compileExpr(n.Index)
 		c.b().Add(code.OpGetIndex, n.Lbracket)
+
+	case *ast.MemberExpr:
+		c.compileExpr(n.X)
+		idx := c.b().Const(object.Str{Value: n.Name.Name})
+		c.b().AddU16(code.OpGetMember, idx, n.DotPos)
 
 	case *ast.FnExpr:
 		idx := c.enterFn("", n.Params, n.Body)

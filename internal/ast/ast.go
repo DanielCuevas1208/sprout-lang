@@ -75,6 +75,7 @@ func (p *Param) End() source.Pos {
 type LetStmt struct {
 	KwPos   source.Pos
 	IsConst bool
+	Public  bool // exported from a module at the top level
 	Name    *Ident
 	Type    *Ident // optional type annotation
 	Value   Expr
@@ -95,6 +96,7 @@ func (*LetStmt) stmt() {}
 // FnStmt declares a named function.
 type FnStmt struct {
 	FnPos  source.Pos
+	Public bool // exported from a module at the top level
 	Name   *Ident
 	Params []*Param
 	Body   *Block
@@ -108,6 +110,25 @@ func (s *FnStmt) End() source.Pos {
 	return s.FnPos
 }
 func (*FnStmt) stmt() {}
+
+// ImportStmt loads a module and binds its namespace to a name.
+type ImportStmt struct {
+	KwPos source.Pos
+	// Path is the module path from the import statement.
+	Path string
+	// Name is the name the module is bound to. It comes from an "as"
+	// clause, or from the last segment of Path.
+	Name *Ident
+}
+
+func (s *ImportStmt) Pos() source.Pos { return s.KwPos }
+func (s *ImportStmt) End() source.Pos {
+	if s.Name != nil {
+		return s.Name.End()
+	}
+	return s.KwPos
+}
+func (*ImportStmt) stmt() {}
 
 // Block is a sequence of statements between braces.
 type Block struct {
@@ -363,6 +384,27 @@ func (n *IndexExpr) Pos() source.Pos {
 func (n *IndexExpr) End() source.Pos { return n.Lbracket }
 func (*IndexExpr) expr()             {}
 
+// MemberExpr reads a named member of a value, such as a module export.
+type MemberExpr struct {
+	X      Expr
+	DotPos source.Pos
+	Name   *Ident
+}
+
+func (n *MemberExpr) Pos() source.Pos {
+	if n.X != nil {
+		return n.X.Pos()
+	}
+	return n.DotPos
+}
+func (n *MemberExpr) End() source.Pos {
+	if n.Name != nil {
+		return n.Name.End()
+	}
+	return n.DotPos
+}
+func (*MemberExpr) expr() {}
+
 // FnExpr is an anonymous function literal.
 type FnExpr struct {
 	FnPos  source.Pos
@@ -401,6 +443,9 @@ func (p *printer) node(n Node) {
 		if v.IsConst {
 			kw = "const"
 		}
+		if v.Public {
+			kw = "export " + kw
+		}
 		p.group(kw, func() {
 			p.name(v.Name)
 			if v.Type != nil {
@@ -408,8 +453,17 @@ func (p *printer) node(n Node) {
 			}
 			p.exprField("value", v.Value)
 		})
+	case *ImportStmt:
+		p.group("import", func() {
+			p.atom(strconv.Quote(v.Path))
+			p.name(v.Name)
+		})
 	case *FnStmt:
-		p.group("fn "+v.Name.Name, func() {
+		head := "fn " + v.Name.Name
+		if v.Public {
+			head = "export " + head
+		}
+		p.group(head, func() {
 			p.params(v.Params)
 			p.block(v.Body)
 		})
@@ -502,6 +556,11 @@ func (p *printer) node(n Node) {
 		p.group("index", func() {
 			p.node(v.X)
 			p.node(v.Index)
+		})
+	case *MemberExpr:
+		p.group("member", func() {
+			p.node(v.X)
+			p.name(v.Name)
 		})
 	case *FnExpr:
 		p.group("fn", func() {

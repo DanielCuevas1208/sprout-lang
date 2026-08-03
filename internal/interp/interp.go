@@ -4,6 +4,10 @@
 // bytecode virtual machine through the runtime package. It evaluates the AST
 // directly and keeps a single source of truth for arithmetic, comparison,
 // indexing, and iteration behavior.
+//
+// Modules run in a fresh interpreter that shares this interpreter's loader.
+// That keeps the standard library, the streams, and the module cache
+// consistent across the whole project.
 package interp
 
 import (
@@ -13,6 +17,7 @@ import (
 
 	"github.com/sprout-lang/sprout/internal/ast"
 	"github.com/sprout-lang/sprout/internal/diag"
+	"github.com/sprout-lang/sprout/internal/mod"
 	"github.com/sprout-lang/sprout/internal/object"
 	"github.com/sprout-lang/sprout/internal/runtime"
 	"github.com/sprout-lang/sprout/internal/source"
@@ -25,6 +30,7 @@ type Interpreter struct {
 	file    *source.File
 	ctx     runtime.Context
 	frames  []diag.Frame
+	loader  *mod.Loader
 }
 
 // New returns an interpreter wired to the process standard streams.
@@ -43,8 +49,31 @@ func NewWithIO(stdin io.Reader, stdout, stderr io.Writer) *Interpreter {
 			return iv.call(fn, args, pos)
 		},
 	}
+	iv.loader = mod.NewLoader(iv.runModule)
 	RegisterBuiltins(iv)
 	return iv
+}
+
+// runModule executes a module body in a fresh interpreter.
+//
+// The fresh interpreter shares iv's loader, so nested imports reuse the same
+// cache and the same cycle detection. The exported values are read from the
+// fresh globals after the body finishes.
+func (iv *Interpreter) runModule(file *source.File, prog *ast.Program) (map[string]object.Object, error) {
+	sub := NewWithIO(iv.ctx.Stdin, iv.ctx.Stdout, iv.ctx.Stderr)
+	sub.loader = iv.loader
+	if _, rerr := sub.Exec(file, prog); rerr != nil {
+		return nil, rerr
+	}
+	exports := make(map[string]object.Object, len(mod.ExportedNames(prog)))
+	for _, name := range mod.ExportedNames(prog) {
+		v, err := sub.globals.Get(name)
+		if err != nil {
+			return nil, err
+		}
+		exports[name] = v
+	}
+	return exports, nil
 }
 
 // Globals returns the top-level environment.
@@ -62,6 +91,7 @@ func (e *RunError) Error() string { return e.Message }
 
 // runErr is the panic signal for runtime errors.
 type runErr struct {
+	file    *source.File
 	message string
 	pos     source.Pos
 	frames  []diag.Frame
@@ -81,6 +111,9 @@ type continueSignal struct{ pos source.Pos }
 // It returns the final statement value (usually nil) and a *RunError if the
 // program stopped with a runtime error.
 func (iv *Interpreter) Exec(file *source.File, prog *ast.Program) (val object.Object, rerr *RunError) {
+	if iv.loader == nil {
+		iv.loader = mod.NewLoader(iv.runModule)
+	}
 	prevFile := iv.file
 	prevFrames := iv.frames
 	iv.file = file
@@ -120,7 +153,11 @@ func (iv *Interpreter) Eval(file *source.File, e ast.Expr) (val object.Object, r
 func (iv *Interpreter) asRunError(r any) *RunError {
 	switch s := r.(type) {
 	case *runErr:
-		return &RunError{Message: s.message, File: iv.file, Pos: s.pos, Frames: s.frames}
+		file := s.file
+		if file == nil {
+			file = iv.file
+		}
+		return &RunError{Message: s.message, File: file, Pos: s.pos, Frames: s.frames}
 	case *returnSignal:
 		return &RunError{Message: "return used outside a function", File: iv.file, Pos: s.pos}
 	case *breakSignal:
@@ -135,6 +172,7 @@ func (iv *Interpreter) asRunError(r any) *RunError {
 // raise aborts evaluation with a runtime error.
 func (iv *Interpreter) raise(message string, pos source.Pos) {
 	panic(&runErr{
+		file:    iv.file,
 		message: message,
 		pos:     pos,
 		frames:  append([]diag.Frame(nil), iv.frames...),
@@ -168,8 +206,19 @@ func (iv *Interpreter) evalStmt(s ast.Stmt, env *Env) object.Object {
 		env.Define(n.Name.Name, value, n.IsConst)
 		return object.NilValue
 
+	case *ast.ImportStmt:
+		m, err := iv.loader.Load(n.Path, iv.file.Name)
+		if err != nil {
+			if rerr, ok := err.(*RunError); ok {
+				panic(&runErr{file: rerr.File, message: rerr.Message, pos: rerr.Pos, frames: rerr.Frames})
+			}
+			iv.raise(err.Error(), n.KwPos)
+		}
+		env.Define(n.Name.Name, m, true)
+		return object.NilValue
+
 	case *ast.FnStmt:
-		fn := &Function{Name: n.Name.Name, Params: n.Params, Body: n.Body, Env: env}
+		fn := &Function{Name: n.Name.Name, Params: n.Params, Body: n.Body, Env: env, File: iv.file}
 		env.Define(n.Name.Name, fn, true)
 		return object.NilValue
 
@@ -313,11 +362,30 @@ func (iv *Interpreter) evalExpr(e ast.Expr, env *Env) object.Object {
 		}
 		return v
 
+	case *ast.MemberExpr:
+		return iv.evalMember(n, env)
+
 	case *ast.FnExpr:
-		return &Function{Params: n.Params, Body: n.Body, Env: env}
+		return &Function{Params: n.Params, Body: n.Body, Env: env, File: iv.file}
 	}
 	iv.raise("unsupported expression", e.Pos())
 	return nil
+}
+
+// evalMember reads a named member of a value.
+//
+// A member read is valid on a module. Every other value raises an error.
+func (iv *Interpreter) evalMember(n *ast.MemberExpr, env *Env) object.Object {
+	base := iv.evalExpr(n.X, env)
+	m, ok := base.(*object.Module)
+	if !ok {
+		iv.raise(fmt.Sprintf("cannot read a member of a %s", base.Type()), n.DotPos)
+	}
+	v, exists := m.Get(n.Name.Name)
+	if !exists {
+		iv.raise(fmt.Sprintf("module '%s' does not export '%s'", m.Name, n.Name.Name), n.DotPos)
+	}
+	return v
 }
 
 func (iv *Interpreter) evalUnary(n *ast.UnaryExpr, env *Env) object.Object {
@@ -439,6 +507,11 @@ func (iv *Interpreter) call(callee object.Object, args []object.Object, pos sour
 		if len(args) != len(fn.Params) {
 			iv.raise(fmt.Sprintf("function '%s' expects %d arguments, got %d", fn.Name, len(fn.Params), len(args)), pos)
 		}
+		prevFile := iv.file
+		if fn.File != nil {
+			iv.file = fn.File
+		}
+		defer func() { iv.file = prevFile }()
 		callEnv := NewEnv(fn.Env)
 		for i, param := range fn.Params {
 			callEnv.Define(param.Name.Name, args[i], false)

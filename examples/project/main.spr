@@ -1,0 +1,16 @@
+// A small multi-file project. Run it with any of these commands.
+//
+//   sprout run examples/project/main.spr
+//   sprout vm examples/project/main.spr
+//   sprout build examples/project/main.spr
+//   sprout run examples/project/main.sprb
+
+import "./greet"
+import "./numbers" as math
+import "./util/format"
+
+print(greet.hello("world"))
+print(greet.greet())
+print(math.square(5))
+print(math.cube(3))
+print(format.shout("done"))

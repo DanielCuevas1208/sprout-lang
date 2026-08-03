@@ -115,7 +115,7 @@ var singleCharOps = map[byte]token.Kind{
 	'(': token.LPAREN, ')': token.RPAREN,
 	'[': token.LBRACKET, ']': token.RBRACKET,
 	'{': token.LBRACE, '}': token.RBRACE,
-	',': token.COMMA, ':': token.COLON,
+	',': token.COMMA, ':': token.COLON, '.': token.DOT,
 }
 
 func (l *Lexer) lexIdent(pos source.Pos) token.Token {

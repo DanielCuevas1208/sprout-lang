@@ -157,6 +157,66 @@ func TestStatements(t *testing.T) {
 	}
 }
 
+func TestModules(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{
+			`import "greet"`,
+			`(program (import "greet" greet))`,
+		},
+		{
+			`import "./util/format"`,
+			`(program (import "./util/format" format))`,
+		},
+		{
+			`import "./numbers" as math`,
+			`(program (import "./numbers" math))`,
+		},
+		{
+			`export fn hello(name) { return name }`,
+			`(program (export fn hello (params name) (block (return value name))))`,
+		},
+		{
+			`export const PI = 3`,
+			`(program (export const PI value (int 3)))`,
+		},
+		{
+			`export let count = 0`,
+			`(program (export let count value (int 0)))`,
+		},
+		{
+			`math.square(5)`,
+			`(program (call (member math square) (int 5)))`,
+		},
+		{
+			`a.b.c`,
+			`(program (member (member a b) c))`,
+		},
+		{
+			`mod.api().x`,
+			`(program (member (call (member mod api)) x))`,
+		},
+	}
+	for _, c := range cases {
+		expectParse(t, c.src, c.want)
+	}
+}
+
+func TestModuleErrors(t *testing.T) {
+	cases := []struct {
+		src  string
+		want string
+	}{
+		{`import 42`, "expected a module path string"},
+		{`import "x" bar`, "expected 'as' or the end"},
+		{`export 5`, "expected 'let', 'const', or a named 'fn'"},
+		{`export print(1)`, "expected 'let', 'const', or a named 'fn'"},
+		{`a.`, "expected a member name after '.'"},
+	}
+	for _, c := range cases {
+		expectErrors(t, c.src, c.want)
+	}
+}
+
 func TestMultiline(t *testing.T) {
 	src := "let total = [\n  1,\n  2,\n]\nprint(\n  total\n)"
 	_, msgs := parseSexp(src)

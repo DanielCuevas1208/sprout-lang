@@ -1,0 +1,9 @@
+// Formatting helpers for the module demo.
+
+export fn shout(text) {
+    return upper(text) + "!"
+}
+
+export fn join_words(a, b) {
+    return a + " " + b
+}

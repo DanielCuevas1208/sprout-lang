@@ -20,6 +20,7 @@ const (
 	TypeMap      Type = "map"
 	TypeFunction Type = "function"
 	TypeRange    Type = "range"
+	TypeModule   Type = "module"
 )
 
 func (t Type) String() string { return string(t) }
@@ -176,6 +177,32 @@ func (r Range) String() string {
 		return fmt.Sprintf("range(%d, %d)", r.Start, r.End)
 	}
 	return fmt.Sprintf("range(%d, %d, %d)", r.Start, r.End, r.Step)
+}
+
+// Module is a loaded namespace of exported names.
+//
+// Modules are immutable once loaded. The loader fills the exports before a
+// program can observe the value.
+type Module struct {
+	Name    string
+	Path    string
+	exports map[string]Object
+}
+
+// NewModule returns a module value with the given exports.
+func NewModule(name, path string, exports map[string]Object) *Module {
+	return &Module{Name: name, Path: path, exports: exports}
+}
+
+// Get returns the exported value bound to name.
+func (m *Module) Get(name string) (Object, bool) {
+	v, ok := m.exports[name]
+	return v, ok
+}
+
+func (m *Module) Type() Type { return TypeModule }
+func (m *Module) String() string {
+	return "<module " + m.Name + ">"
 }
 
 // Repr renders o in a form that is close to its source literal.

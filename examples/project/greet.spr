@@ -1,0 +1,12 @@
+// A greeting module that imports another module.
+import "./util/format"
+
+export const DEFAULT_NAME = "friend"
+
+export fn hello(name) {
+    return format.join_words("hello,", name) + format.shout("")
+}
+
+export fn greet() {
+    return hello(DEFAULT_NAME)
+}

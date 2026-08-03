@@ -36,6 +36,7 @@ const (
 	OpSetUp       // uint16 depth, uint16 slot: store into an enclosing env
 	OpBuiltin     // uint16 index into the standard library
 	OpClosure     // uint16 index into Consts: capture the current env
+	OpImport      // uint16 string index into Consts: load a module and push it
 	OpCall        // byte count: call the top value with count arguments
 	OpReturn      // return nil
 	OpReturnValue // return the top of the stack
@@ -44,6 +45,7 @@ const (
 	OpJumpIfTrue  // uint16 target: pop, jump when truthy
 	OpGetIndex    // pop index and container, push element
 	OpSetIndex    // pop value, index, and container, push value
+	OpGetMember   // uint16 string index into Consts: read a named member
 	OpBuildList   // uint16 count: collect count values into a list
 	OpBuildMap    // uint16 count: collect count key/value pairs into a map
 	OpMakeIter    // pop an iterable, push an iterator
@@ -80,6 +82,7 @@ var opNames = map[Opcode]string{
 	OpSetUp:       "SET_UP",
 	OpBuiltin:     "BUILTIN",
 	OpClosure:     "CLOSURE",
+	OpImport:      "IMPORT",
 	OpCall:        "CALL",
 	OpReturn:      "RETURN",
 	OpReturnValue: "RETURN_VALUE",
@@ -88,6 +91,7 @@ var opNames = map[Opcode]string{
 	OpJumpIfTrue:  "JUMP_IF_TRUE",
 	OpGetIndex:    "GET_INDEX",
 	OpSetIndex:    "SET_INDEX",
+	OpGetMember:   "GET_MEMBER",
 	OpBuildList:   "BUILD_LIST",
 	OpBuildMap:    "BUILD_MAP",
 	OpMakeIter:    "MAKE_ITER",
@@ -126,6 +130,9 @@ type Function struct {
 	NumSlots int
 	Code     []byte
 	Consts   []object.Object
+	// Exports maps a top-level exported name to its environment slot.
+	// It is set only for the entry function of a module.
+	Exports map[string]int
 	// Positions tracks the source position of each instruction.
 	// Positions[offset] is valid only where an instruction starts.
 	Positions []source.Pos
@@ -148,6 +155,9 @@ func (f *Function) String() string {
 // Program is a compiled Sprout program. Main is the entry function.
 type Program struct {
 	Main *Function
+	// Text is the source text of the main file. It is empty for programs
+	// compiled in memory and set for programs read from a bytecode artifact.
+	Text string
 }
 
 // Builder assembles one function's bytecode.
@@ -212,6 +222,9 @@ func (b *Builder) Const(v object.Object) uint16 {
 // SetNumSlots records how many slots the call environment needs.
 func (b *Builder) SetNumSlots(n int) { b.fn.NumSlots = n }
 
+// SetExports records the exported name-to-slot table of a module entry.
+func (b *Builder) SetExports(exports map[string]int) { b.fn.Exports = exports }
+
 // track records a position for the instruction that starts at off.
 func (b *Builder) track(off int, pos source.Pos) {
 	if off >= len(b.fn.Positions) {
@@ -264,7 +277,7 @@ func (d *disassembler) instruction(ip int) (int, bool) {
 	}
 	defer func() { d.b.WriteString("\n") }()
 	switch op {
-	case OpPushConst:
+	case OpPushConst, OpImport, OpGetMember:
 		idx := U16(d.fn.Code, ip+1)
 		fmt.Fprintf(&d.b, "  %d  (%s)", idx, d.fn.Consts[idx])
 		return ip + 3, true

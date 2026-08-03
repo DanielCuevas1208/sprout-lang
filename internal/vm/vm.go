@@ -8,6 +8,9 @@
 // heap objects that mirror the compiler's scopes. Closures capture their
 // defining environment, which gives Sprout the standard shared-environment
 // semantics.
+//
+// Modules are compiled and run on a fresh VM that shares this VM's loader.
+// That keeps the module cache and the streams consistent across a project.
 package vm
 
 import (
@@ -16,8 +19,11 @@ import (
 	"os"
 	"strings"
 
+	"github.com/sprout-lang/sprout/internal/ast"
 	"github.com/sprout-lang/sprout/internal/code"
+	"github.com/sprout-lang/sprout/internal/compiler"
 	"github.com/sprout-lang/sprout/internal/diag"
+	"github.com/sprout-lang/sprout/internal/mod"
 	"github.com/sprout-lang/sprout/internal/object"
 	"github.com/sprout-lang/sprout/internal/runtime"
 	"github.com/sprout-lang/sprout/internal/source"
@@ -88,6 +94,7 @@ func (e *RunError) Error() string { return e.Message }
 
 // vmErr is the panic signal for runtime errors.
 type vmErr struct {
+	file   *source.File
 	msg    string
 	pos    source.Pos
 	frames []diag.Frame
@@ -95,9 +102,11 @@ type vmErr struct {
 
 // VM executes compiled Sprout programs.
 type VM struct {
-	ctx    runtime.Context
-	stack  []object.Object
-	frames []*frame
+	ctx     runtime.Context
+	stack   []object.Object
+	frames  []*frame
+	loader  *mod.Loader
+	lastEnv *Env
 }
 
 // New returns a VM wired to the process standard streams.
@@ -116,7 +125,30 @@ func NewWithIO(stdin io.Reader, stdout, stderr io.Writer) *VM {
 			return vm.callValue(fn, args, pos)
 		},
 	}
+	vm.loader = mod.NewLoader(vm.runModule)
 	return vm
+}
+
+// runModule executes a module body on a fresh VM.
+//
+// The fresh VM shares vm's loader, so nested imports reuse the same cache and
+// the same cycle detection. The exported values are read from the entry
+// environment of the compiled module.
+func (vm *VM) runModule(file *source.File, prog *ast.Program) (map[string]object.Object, error) {
+	compiled, err := compiler.Compile(file, prog)
+	if err != nil {
+		return nil, err
+	}
+	sub := NewWithIO(vm.ctx.Stdin, vm.ctx.Stdout, vm.ctx.Stderr)
+	sub.loader = vm.loader
+	if _, rerr := sub.Run(file, compiled); rerr != nil {
+		return nil, rerr
+	}
+	exports := make(map[string]object.Object, len(compiled.Main.Exports))
+	for name, slot := range compiled.Main.Exports {
+		exports[name] = sub.lastEnv.slots[slot]
+	}
+	return exports, nil
 }
 
 // Run executes the compiled program.
@@ -124,6 +156,9 @@ func NewWithIO(stdin io.Reader, stdout, stderr io.Writer) *VM {
 // It returns the final value of the entry function (usually nil) and a
 // *RunError when the program stops with a runtime error.
 func (vm *VM) Run(file *source.File, prog *code.Program) (val object.Object, rerr *RunError) {
+	if vm.loader == nil {
+		vm.loader = mod.NewLoader(vm.runModule)
+	}
 	prevStack, prevFrames := vm.stack, vm.frames
 	vm.stack = vm.stack[:0]
 	vm.frames = vm.frames[:0]
@@ -132,7 +167,11 @@ func (vm *VM) Run(file *source.File, prog *code.Program) (val object.Object, rer
 		vm.frames = prevFrames
 		if r := recover(); r != nil {
 			if e, ok := r.(*vmErr); ok {
-				val, rerr = nil, &RunError{Message: e.msg, File: file, Pos: e.pos, Frames: e.frames}
+				f := e.file
+				if f == nil {
+					f = file
+				}
+				val, rerr = nil, &RunError{Message: e.msg, File: f, Pos: e.pos, Frames: e.frames}
 				return
 			}
 			panic(r)
@@ -141,6 +180,7 @@ func (vm *VM) Run(file *source.File, prog *code.Program) (val object.Object, rer
 
 	main := prog.Main
 	env := &Env{slots: make([]object.Object, main.NumSlots)}
+	vm.lastEnv = env
 	vm.frames = append(vm.frames, &frame{
 		fn:   main,
 		env:  env,
@@ -153,7 +193,20 @@ func (vm *VM) Run(file *source.File, prog *code.Program) (val object.Object, rer
 
 // failAtPos aborts execution with a runtime error.
 func (vm *VM) failAtPos(msg string, pos source.Pos) {
-	panic(&vmErr{msg: msg, pos: pos, frames: vm.stackTrace()})
+	panic(&vmErr{file: vm.currentFile(), msg: msg, pos: pos, frames: vm.stackTrace()})
+}
+
+// currentFile returns the source file of the current function.
+//
+// The loader keeps the source of every module it read. A frame inside a
+// module maps to that source, so diagnostics show the module's own lines. The
+// entry function is not a module, so it returns nil and the caller falls back
+// to the file passed to Run.
+func (vm *VM) currentFile() *source.File {
+	if len(vm.frames) == 0 || vm.loader == nil {
+		return nil
+	}
+	return vm.loader.File(vm.frames[len(vm.frames)-1].fn.FileName)
 }
 
 // stackTrace builds the call stack, skipping the entry frame.
@@ -286,6 +339,34 @@ func (vm *VM) runFrames(until int) object.Object {
 			f := fn.Consts[idx].(*code.Function)
 			vm.push(&Closure{fn: f, env: fr.env})
 			fr.ip += 3
+		case code.OpImport:
+			pos := fr.pos()
+			idx := code.U16(fn.Code, fr.ip+1)
+			fr.ip += 3
+			path := fn.Consts[idx].(object.Str).Value
+			m, err := vm.loader.Load(path, fn.FileName)
+			if err != nil {
+				if rerr, ok := err.(*RunError); ok {
+					panic(&vmErr{file: rerr.File, msg: rerr.Message, pos: rerr.Pos, frames: rerr.Frames})
+				}
+				vm.failAtPos(err.Error(), pos)
+			}
+			vm.push(m)
+		case code.OpGetMember:
+			pos := fr.pos()
+			idx := code.U16(fn.Code, fr.ip+1)
+			fr.ip += 3
+			name := fn.Consts[idx].(object.Str).Value
+			base := vm.pop()
+			m, ok := base.(*object.Module)
+			if !ok {
+				vm.failAtPos(fmt.Sprintf("cannot read a member of a %s", base.Type()), pos)
+			}
+			v, exists := m.Get(name)
+			if !exists {
+				vm.failAtPos(fmt.Sprintf("module '%s' does not export '%s'", m.Name, name), pos)
+			}
+			vm.push(v)
 		case code.OpCall:
 			n := int(fn.Code[fr.ip+1])
 			pos := fr.pos()

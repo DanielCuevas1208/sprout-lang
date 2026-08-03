@@ -213,6 +213,34 @@ condition is false. It is useful for tests and examples.
 assert(2 + 2 == 4, "math still works")
 ```
 
+## Modules
+
+Split a program into files with modules.
+A module exports names with `export`.
+Import it with `import`.
+
+```sprout
+// greet.spr
+export fn hello(name) {
+    return "hello, " + name
+}
+
+// main.spr
+import "./greet"
+print(greet.hello("world"))
+```
+
+A relative path resolves against the importing file.
+Use `as` to bind a different name.
+
+```sprout
+import "./numbers" as math
+print(math.square(5))
+```
+
+A module runs once. Its private names stay hidden.
+Read `docs/modules.md` for the full reference.
+
 ## Interactive mode
 
 Run `sprout repl` to start a session. The session keeps its state between
@@ -245,9 +273,27 @@ sprout dis examples/hello.spr
 
 Read `docs/bytecode.md` for the full VM reference.
 
+## Builds
+
+Compile a project into a bytecode artifact.
+
+```text
+sprout build examples/project/main.spr
+```
+
+Run the artifact on the virtual machine.
+
+```text
+sprout run examples/project/main.sprb
+```
+
+The build checks the whole project first.
+Read `docs/modules.md` for the build reference.
+
 ## Next steps
 
 Read the standard library reference in `docs/stdlib.md`.
 Read the formal grammar in `docs/grammar.md`.
 Read the bytecode virtual machine in `docs/bytecode.md`.
+Read the module system and build tool in `docs/modules.md`.
 Run the example programs in the `examples` directory.

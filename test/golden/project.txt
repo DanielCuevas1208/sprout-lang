@@ -1,0 +1,5 @@
+hello, world!
+hello, friend!
+25
+27
+DONE!

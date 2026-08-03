@@ -19,6 +19,7 @@ The VM executes those instructions.
 
 The `sprout vm` command runs the whole pipeline.
 The `sprout dis` command shows the compiled instructions.
+The `sprout build` command serializes the compiled program.
 
 ## Bytecode format
 
@@ -89,6 +90,7 @@ This matches the interpreter, so closures see their own copy.
 | SET_UP | depth, slot | Store in an enclosing slot. |
 | BUILTIN | index | Push a standard function. |
 | CLOSURE | index | Capture the current environment. |
+| IMPORT | index | Load a module and push it. |
 | CALL | count | Call the top value. |
 | RETURN | none | Return nil. |
 | RETURN_VALUE | none | Return the top. |
@@ -97,6 +99,7 @@ This matches the interpreter, so closures see their own copy.
 | JUMP_IF_TRUE | target | Pop, jump when truthy. |
 | GET_INDEX | none | Pop index and container. |
 | SET_INDEX | none | Pop value, index, and container. |
+| GET_MEMBER | index | Pop a module, push a member. |
 | BUILD_LIST | count | Build a list. |
 | BUILD_MAP | count | Build a map. |
 | MAKE_ITER | none | Pop an iterable, push an iterator. |
@@ -115,6 +118,19 @@ This matches the interpreter, so closures see their own copy.
 | LE | none | Test less or equal. |
 | GT | none | Test greater than. |
 | GE | none | Test greater or equal. |
+
+## Modules
+
+The IMPORT instruction loads a module.
+Its operand is a string constant holding the module path.
+The VM resolves the path against the directory of the current function.
+A module runs once. Later imports push the cached value.
+
+The GET_MEMBER instruction reads an exported name.
+Its operand is a string constant holding the member name.
+The VM pops a module value and pushes the member value.
+A missing member is a runtime error.
+The checker reports a missing member before a program runs.
 
 ## Short-circuiting
 
@@ -177,3 +193,5 @@ go test ./test/ -run EnginesAgree
 - Constant assignment is rejected by the compiler.
 - `break` and `continue` inside a closure are not supported.
 - A function call carries at most 255 arguments.
+- An IMPORT path is a string constant, so it cannot be computed at run time.
+- A bytecode artifact is not self-contained. It loads modules from disk.

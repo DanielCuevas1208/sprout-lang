@@ -3,6 +3,10 @@
 // It reports problems that would otherwise surface at runtime: undefined
 // names, assignment to constants, duplicate declarations, and control-flow
 // misuse. It also sanity-checks optional type annotations on literals.
+//
+// A program may import modules. When the caller provides a ModuleResolver,
+// the checker validates the imports and the members read from them. Without a
+// resolver, imports are bound but their contents are not inspected.
 package checker
 
 import (
@@ -10,10 +14,22 @@ import (
 
 	"github.com/sprout-lang/sprout/internal/ast"
 	"github.com/sprout-lang/sprout/internal/diag"
-	"github.com/sprout-lang/sprout/internal/interp"
+	"github.com/sprout-lang/sprout/internal/runtime"
 	"github.com/sprout-lang/sprout/internal/source"
 	"github.com/sprout-lang/sprout/internal/token"
 )
+
+// ModuleResolver loads the exported names of a module for static checks.
+//
+// The checker calls ModuleExports once per import. The implementation is
+// responsible for resolving the path and for reporting each module's
+// diagnostics only once.
+type ModuleResolver interface {
+	// ModuleExports returns the exported names of the module at path,
+	// relative to fromFile. It also returns the diagnostics found while
+	// loading the module and an error when the module cannot be loaded.
+	ModuleExports(path, fromFile string) (exports map[string]bool, diags []diag.Diagnostic, err error)
+}
 
 type symKind int
 
@@ -22,6 +38,7 @@ const (
 	symConst
 	symFunc
 	symParam
+	symImport
 )
 
 type symbol struct {
@@ -41,14 +58,25 @@ func newScope(parent *scope) *scope {
 
 // Check reports the diagnostics found in prog.
 func Check(file *source.File, prog *ast.Program) []diag.Diagnostic {
-	c := &checker{file: file}
-	c.checkStmts(prog.Stmts, newScope(nil))
+	return CheckWith(file, prog, nil)
+}
+
+// CheckWith reports the diagnostics found in prog, validating module imports
+// with resolver when it is not nil.
+func CheckWith(file *source.File, prog *ast.Program, resolver ModuleResolver) []diag.Diagnostic {
+	c := &checker{file: file, resolver: resolver, modules: make(map[string]map[string]bool)}
+	c.checkStmts(prog.Stmts, newScope(nil), true)
 	return c.diags
 }
 
 type checker struct {
-	file      *source.File
-	diags     []diag.Diagnostic
+	file     *source.File
+	resolver ModuleResolver
+	diags    []diag.Diagnostic
+	// modules maps a bound import name to its exported names. A nil value
+	// means the module was imported without a resolver.
+	modules map[string]map[string]bool
+	// funcDepth is the number of open function bodies.
 	funcDepth int
 	loopDepth int
 }
@@ -57,14 +85,14 @@ type checker struct {
 var builtinNames = buildBuiltinSet()
 
 func buildBuiltinSet() map[string]bool {
-	set := make(map[string]bool, len(interp.BuiltinNames))
-	for _, n := range interp.BuiltinNames {
+	set := make(map[string]bool, len(runtime.Names))
+	for _, n := range runtime.Names {
 		set[n] = true
 	}
 	return set
 }
 
-func (c *checker) checkStmts(stmts []ast.Stmt, sc *scope) {
+func (c *checker) checkStmts(stmts []ast.Stmt, sc *scope, atTop bool) {
 	// Pre-declare function names so functions can call later functions.
 	for _, s := range stmts {
 		if fn, ok := s.(*ast.FnStmt); ok {
@@ -72,7 +100,7 @@ func (c *checker) checkStmts(stmts []ast.Stmt, sc *scope) {
 		}
 	}
 	for _, s := range stmts {
-		c.checkStmt(s, sc)
+		c.checkStmt(s, sc, atTop)
 	}
 }
 
@@ -84,32 +112,37 @@ func (c *checker) declare(sc *scope, name string, kind symKind, pos source.Pos, 
 	sc.names[name] = symbol{kind: kind, pos: pos, typeAnn: typeAnn}
 }
 
-func (c *checker) checkStmt(s ast.Stmt, sc *scope) {
+func (c *checker) checkStmt(s ast.Stmt, sc *scope, atTop bool) {
 	switch n := s.(type) {
 	case *ast.LetStmt:
-		c.checkLet(n, sc)
+		c.checkLet(n, sc, atTop)
 	case *ast.FnStmt:
+		if n.Public && !atTop {
+			c.errorf(n.FnPos, "'export' can only appear at the top level of a file")
+		}
 		funcScope := newScope(sc)
 		for _, p := range n.Params {
 			c.checkParam(funcScope, p)
 		}
 		c.funcDepth++
-		c.checkStmts(n.Body.Stmts, funcScope)
+		c.checkStmts(n.Body.Stmts, funcScope, false)
 		c.funcDepth--
+	case *ast.ImportStmt:
+		c.checkImport(n, sc)
 	case *ast.IfStmt:
 		c.checkExpr(n.Cond, sc)
-		c.checkStmts(n.Then.Stmts, newScope(sc))
+		c.checkStmts(n.Then.Stmts, newScope(sc), false)
 		for _, b := range n.Elifs {
 			c.checkExpr(b.Cond, sc)
-			c.checkStmts(b.Body.Stmts, newScope(sc))
+			c.checkStmts(b.Body.Stmts, newScope(sc), false)
 		}
 		if n.Else != nil {
-			c.checkStmts(n.Else.Stmts, newScope(sc))
+			c.checkStmts(n.Else.Stmts, newScope(sc), false)
 		}
 	case *ast.WhileStmt:
 		c.checkExpr(n.Cond, sc)
 		c.loopDepth++
-		c.checkStmts(n.Body.Stmts, newScope(sc))
+		c.checkStmts(n.Body.Stmts, newScope(sc), false)
 		c.loopDepth--
 	case *ast.ForInStmt:
 		c.checkExpr(n.Iterable, sc)
@@ -120,7 +153,7 @@ func (c *checker) checkStmt(s ast.Stmt, sc *scope) {
 			bodyScope.names[n.Var.Name] = symbol{kind: symVar, pos: n.Var.Position}
 		}
 		c.loopDepth++
-		c.checkStmts(n.Body.Stmts, bodyScope)
+		c.checkStmts(n.Body.Stmts, bodyScope, false)
 		c.loopDepth--
 	case *ast.ReturnStmt:
 		if c.funcDepth == 0 {
@@ -142,6 +175,32 @@ func (c *checker) checkStmt(s ast.Stmt, sc *scope) {
 	}
 }
 
+// checkImport validates an import statement and binds its module name.
+//
+// Importing the same module path twice in one file is allowed and is a no-op.
+// A second import under the same name but a different path is a duplicate.
+func (c *checker) checkImport(n *ast.ImportStmt, sc *scope) {
+	if sym, dup := sc.names[n.Name.Name]; dup {
+		if !(sym.kind == symImport && sym.typeAnn == n.Path) {
+			c.errorf(n.Name.Position, "duplicate declaration of '%s'", n.Name.Name)
+		}
+	} else {
+		// The path rides in typeAnn so a re-import of the same path is
+		// recognized as the same binding.
+		sc.names[n.Name.Name] = symbol{kind: symImport, pos: n.KwPos, typeAnn: n.Path}
+	}
+	if c.resolver == nil {
+		c.modules[n.Name.Name] = nil
+		return
+	}
+	exports, diags, err := c.resolver.ModuleExports(n.Path, c.file.Name)
+	c.diags = append(c.diags, diags...)
+	if err != nil {
+		c.errorf(n.KwPos, "cannot load module '%s': %v", n.Path, err)
+	}
+	c.modules[n.Name.Name] = exports
+}
+
 func (c *checker) checkParam(sc *scope, p *ast.Param) {
 	if _, dup := sc.names[p.Name.Name]; dup {
 		c.errorf(p.Name.Position, "duplicate parameter '%s'", p.Name.Name)
@@ -153,11 +212,19 @@ func (c *checker) checkParam(sc *scope, p *ast.Param) {
 	}
 }
 
-func (c *checker) checkLet(n *ast.LetStmt, sc *scope) {
+func (c *checker) checkLet(n *ast.LetStmt, sc *scope, atTop bool) {
+	if n.Public && !atTop {
+		c.errorf(n.KwPos, "'export' can only appear at the top level of a file")
+	}
 	var typeAnn string
 	if n.Type != nil {
 		c.checkTypeAnn(n.Type)
 		typeAnn = n.Type.Name
+	} else if n.Value != nil {
+		// A literal initializer gives the name a known type. This lets the
+		// checker reject a member read on a value that is clearly not a
+		// module.
+		typeAnn = literalType(n.Value)
 	}
 	if _, dup := sc.names[n.Name.Name]; dup {
 		c.errorf(n.Name.Position, "duplicate declaration of '%s'", n.Name.Name)
@@ -169,8 +236,8 @@ func (c *checker) checkLet(n *ast.LetStmt, sc *scope) {
 		sc.names[n.Name.Name] = symbol{kind: kind, pos: n.Name.Position, typeAnn: typeAnn}
 	}
 	if n.Value != nil {
-		if lit := literalType(n.Value); lit != "" && typeAnn != "" && !assignable(lit, typeAnn) {
-			c.errorf(n.Value.Pos(), "cannot initialize a value of type '%s' with a value of type '%s'", typeAnn, lit)
+		if lit := literalType(n.Value); lit != "" && n.Type != nil && !assignable(lit, n.Type.Name) {
+			c.errorf(n.Value.Pos(), "cannot initialize a value of type '%s' with a value of type '%s'", n.Type.Name, lit)
 		}
 		c.checkExpr(n.Value, sc)
 	}
@@ -239,6 +306,8 @@ func (c *checker) checkExpr(e ast.Expr, sc *scope) {
 				}
 			} else if sym.kind == symConst {
 				c.errorf(t.Position, "cannot assign to constant '%s'", t.Name)
+			} else if sym.kind == symImport {
+				c.errorf(t.Position, "cannot assign to an imported module '%s'", t.Name)
 			}
 		case *ast.IndexExpr:
 			c.checkExpr(t.X, sc)
@@ -255,6 +324,9 @@ func (c *checker) checkExpr(e ast.Expr, sc *scope) {
 	case *ast.IndexExpr:
 		c.checkExpr(n.X, sc)
 		c.checkExpr(n.Index, sc)
+	case *ast.MemberExpr:
+		c.checkExpr(n.X, sc)
+		c.checkMember(n, sc)
 	case *ast.UnaryExpr:
 		c.checkExpr(n.X, sc)
 	case *ast.BinaryExpr:
@@ -275,9 +347,53 @@ func (c *checker) checkExpr(e ast.Expr, sc *scope) {
 			c.checkParam(fnScope, p)
 		}
 		c.funcDepth++
-		c.checkStmts(n.Body.Stmts, fnScope)
+		c.checkStmts(n.Body.Stmts, fnScope, false)
 		c.funcDepth--
 	}
+}
+
+// checkMember validates a member read.
+//
+// A module import carries a known export list, so a missing member is a
+// static error. A value with a known literal type can never be a module.
+// Other bases are left to the runtime.
+func (c *checker) checkMember(n *ast.MemberExpr, sc *scope) {
+	if id, ok := n.X.(*ast.Ident); ok {
+		if exports, known := c.modules[id.Name]; known {
+			if exports != nil && !exports[n.Name.Name] {
+				c.errorf(n.Name.Position, "module '%s' does not export '%s'", id.Name, n.Name.Name)
+			}
+			return
+		}
+		if sym, ok := c.lookup(sc, id.Name); ok && sym.typeAnn != "" && sym.kind != symImport {
+			c.errorf(n.DotPos, "cannot read a member of a %s", sym.typeAnn)
+		}
+		return
+	}
+	if lit, ok := memberBaseType(n.X); ok {
+		c.errorf(n.DotPos, "cannot read a member of a %s", lit)
+	}
+}
+
+// memberBaseType returns the type name of a literal member base.
+func memberBaseType(e ast.Expr) (string, bool) {
+	switch e.(type) {
+	case *ast.IntLit:
+		return "int", true
+	case *ast.FloatLit:
+		return "float", true
+	case *ast.StrLit:
+		return "string", true
+	case *ast.BoolLit:
+		return "bool", true
+	case *ast.NilLit:
+		return "nil", true
+	case *ast.ListLit:
+		return "list", true
+	case *ast.MapLit:
+		return "map", true
+	}
+	return "", false
 }
 
 func (c *checker) resolve(sc *scope, name string) bool {
