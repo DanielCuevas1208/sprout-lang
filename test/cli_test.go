@@ -57,7 +57,7 @@ func TestVersion(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("version exit code %d", code)
 	}
-	if !strings.Contains(out, "0.1.0") {
+	if !strings.Contains(out, "0.2.0") {
 		t.Errorf("version output: %q", out)
 	}
 }
@@ -132,6 +132,61 @@ func TestLexAndParse(t *testing.T) {
 	}
 	if !strings.Contains(parseOut, "(program") {
 		t.Errorf("parse output: %q", parseOut)
+	}
+}
+
+func TestRunVM(t *testing.T) {
+	out, _, code := runCLI(t, "", "vm", filepath.Join("..", "examples", "primes.spr"))
+	if code != 0 {
+		t.Fatalf("vm exit code %d", code)
+	}
+	if !strings.Contains(out, "[2, 3, 5, 7, 11, 13, 17, 19, 23, 29]") {
+		t.Errorf("output: %q", out)
+	}
+}
+
+func TestRunVMMatchesRun(t *testing.T) {
+	for _, example := range []string{"fizzbuzz.spr", "fibonacci.spr", "higher_order.spr", "collections.spr"} {
+		interpOut, _, code := runCLI(t, "", "run", filepath.Join("..", "examples", example))
+		if code != 0 {
+			t.Fatalf("run %s exit code %d", example, code)
+		}
+		vmOut, _, code := runCLI(t, "", "vm", filepath.Join("..", "examples", example))
+		if code != 0 {
+			t.Fatalf("vm %s exit code %d", example, code)
+		}
+		if interpOut != vmOut {
+			t.Errorf("engines differ on %s:\ninterp: %q\n    vm: %q", example, interpOut, vmOut)
+		}
+	}
+}
+
+func TestDisassemble(t *testing.T) {
+	out, _, code := runCLI(t, "", "dis", filepath.Join("..", "examples", "fizzbuzz.spr"))
+	if code != 0 {
+		t.Fatalf("dis exit code %d", code)
+	}
+	if !strings.Contains(out, "== fn <main> ==") {
+		t.Errorf("expected function header in: %q", out)
+	}
+	if !strings.Contains(out, "CALL") {
+		t.Errorf("expected CALL in disassembly: %q", out)
+	}
+}
+
+func TestVMCheckFailure(t *testing.T) {
+	src := "print(missing_name)\n"
+	dir := t.TempDir()
+	path := filepath.Join(dir, "bad.spr")
+	if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, errOut, code := runCLI(t, "", "vm", path)
+	if code == 0 {
+		t.Fatalf("vm should fail on a bad program, exit code 0")
+	}
+	if !strings.Contains(errOut, "undefined name 'missing_name'") {
+		t.Errorf("stderr: %q", errOut)
 	}
 }
 

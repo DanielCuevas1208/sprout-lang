@@ -1,18 +1,22 @@
 # Sprout
 
 Sprout is a small programming language that runs on Go.
-It ships with a lexer, a Pratt parser, and a tree-walking interpreter.
-It produces friendly diagnostics that point at the exact problem.
+It ships with a lexer, a Pratt parser, a checker, and two execution engines.
+The engines are a tree-walking interpreter and a bytecode virtual machine.
+Both engines share one value model and one standard library.
+Sprout produces friendly diagnostics that point at the exact problem.
 
 The goal is a language that is easy to learn and easy to read.
 The design favors a short standard library over magic.
-You can grow this codebase into a bytecode virtual machine.
+The bytecode pipeline is a foundation for a faster runtime later.
 
 ## Highlights
 
 - A documented grammar with a line-aware Pratt parser.
 - Source diagnostics with a gutter, line, and caret.
-- A tree-walking interpreter with closures and lexical scope.
+- A bytecode virtual machine with a documented instruction set.
+- A tree-walking interpreter for teaching and debugging.
+- A shared runtime that keeps both engines consistent.
 - A small standard library for real example programs.
 - A REPL for interactive experiments.
 - Deterministic tests for every stage of the pipeline.
@@ -25,10 +29,16 @@ You need Go 1.22 or newer.
 go build ./cmd/sprout
 ```
 
-Run an example program.
+Run an example program on the interpreter.
 
 ```text
 ./sprout run examples/fizzbuzz.spr
+```
+
+Run the same program on the bytecode VM.
+
+```text
+./sprout vm examples/fizzbuzz.spr
 ```
 
 Start an interactive session.
@@ -66,7 +76,9 @@ Run the tour in `docs/tour.md` for a full walkthrough.
 
 | Command | Purpose |
 |---------|---------|
-| `sprout run file.spr` | Runs a program. |
+| `sprout run file.spr` | Runs a program on the interpreter. |
+| `sprout vm file.spr` | Runs a program on the bytecode VM. |
+| `sprout dis file.spr` | Shows the compiled bytecode. |
 | `sprout repl` | Starts a session. |
 | `sprout lex file.spr` | Shows the tokens. |
 | `sprout parse file.spr` | Shows the syntax tree. |
@@ -76,6 +88,22 @@ Run the tour in `docs/tour.md` for a full walkthrough.
 Pass a file path with no command to run it.
 Run `sprout help` to see the full usage.
 Add `-color always` to force colored diagnostics.
+
+## Two engines, one behavior
+
+Sprout has two ways to run a program.
+`run` uses the tree-walking interpreter.
+`vm` compiles the program to bytecode and runs it on a stack machine.
+
+The two engines share a package called `runtime`.
+It holds arithmetic, comparison, indexing, iteration, and the standard library.
+Because both engines use it, they produce identical output.
+
+Each example program has a golden output.
+The test suite runs every example on both engines.
+The suite fails if the engines ever disagree.
+
+See `docs/bytecode.md` for the instruction set and the compiler design.
 
 ## Diagnostics
 
@@ -172,15 +200,20 @@ internal/lexer   the scanner
 internal/ast     the syntax tree
 internal/parser  the Pratt parser
 internal/checker static analysis
+internal/runtime shared value semantics and standard library
 internal/object  runtime values
 internal/interp  the tree-walking interpreter
+internal/compiler  AST to bytecode compiler
+internal/code    bytecode instructions and disassembly
+internal/vm      the stack-based virtual machine
 internal/diag    diagnostics and rendering
 internal/repl    the interactive session
 ```
 
-Each stage is independent. The parser can grow into a compiler.
-The interpreter evaluates the tree directly.
-A later release can replace it with a bytecode virtual machine.
+Each stage is independent.
+The interpreter and the VM read from the same parser and checker.
+The compiler turns the checked tree into instructions.
+The VM executes those instructions on a stack.
 
 ## Development
 
@@ -205,7 +238,7 @@ go test ./...
 Run a single package.
 
 ```text
-go test ./internal/interp/
+go test ./internal/vm/
 ```
 
 ## Test status
@@ -218,19 +251,30 @@ All tests pass on Go 1.22 and newer.
 | `internal/parser` | Precedence, statements, and recovery. |
 | `internal/checker` | Scope and static errors. |
 | `internal/interp` | Evaluation, closures, and runtime errors. |
+| `internal/runtime` | Shared value semantics and builtins. |
+| `internal/compiler` | Bytecode emission and patching. |
+| `internal/code` | Instruction encoding and disassembly. |
+| `internal/vm` | Bytecode execution and stack traces. |
 | `internal/diag` | Diagnostic rendering. |
-| `test` | Example goldens and command line behavior. |
+| `test` | Example goldens, engine parity, and command line. |
 
+The suite runs every example on both engines.
+It proves the interpreter and the VM produce identical output.
 Tests use only the standard library. They need no network or secrets.
 
 ## Roadmap
 
-Version 0.2 adds a stack-based bytecode virtual machine.
-It keeps the same parser and checker.
-Version 0.3 adds a module system and a build tool.
-Version 0.4 adds structs, methods, and interfaces.
-Version 0.5 adds result types and pattern matching.
-Version 0.6 adds concurrency with channels.
+Version 0.2 is complete.
+It added the bytecode VM, the compiler, and the shared runtime.
+
+| Version | Status | Work |
+|---------|--------|------|
+| 0.1 | Complete | Parser, checker, interpreter, diagnostics. |
+| 0.2 | Complete | Bytecode VM, compiler, shared runtime. |
+| 0.3 | Next | Module system and a build tool. |
+| 0.4 | Planned | Structs, methods, and interfaces. |
+| 0.5 | Planned | Result types and pattern matching. |
+| 0.6 | Planned | Concurrency with channels. |
 
 ## Limitations
 
@@ -239,6 +283,7 @@ Version 0.6 adds concurrency with channels.
 - Map keys must be strings.
 - Integer division truncates toward zero.
 - There is no tail-call optimization.
+- The VM materializes iterations as sequences.
 - The standard library is small by design.
 
 ## License

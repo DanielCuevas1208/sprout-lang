@@ -1,3 +1,4 @@
+// Package interp is the tree-walking interpreter for Sprout.
 package interp
 
 import (
@@ -6,7 +7,7 @@ import (
 
 	"github.com/sprout-lang/sprout/internal/ast"
 	"github.com/sprout-lang/sprout/internal/object"
-	"github.com/sprout-lang/sprout/internal/source"
+	"github.com/sprout-lang/sprout/internal/runtime"
 )
 
 // Function is a user-defined function with its captured environment.
@@ -32,15 +33,6 @@ func (f *Function) String() string {
 
 // Builtin is a function implemented in Go.
 //
-// Fn is a bound method on the interpreter, so it can reach the streams and
-// call other functions. pos is the source position of the call site.
-type Builtin struct {
-	Name    string
-	MinArgs int
-	// MaxArgs is the maximum number of arguments, or -1 for no limit.
-	MaxArgs int
-	Fn      func(args []object.Object, pos source.Pos) (object.Object, error)
-}
-
-func (b *Builtin) Type() object.Type { return object.TypeFunction }
-func (b *Builtin) String() string    { return "<builtin " + b.Name + ">" }
+// It is the shared runtime.Builtin value. The interpreter registers these
+// values into its globals and calls them through the runtime Context.
+type Builtin = runtime.Builtin

@@ -1,0 +1,11 @@
+# Normalize line endings so every checkout uses LF.
+# Without this, Windows checkouts convert files to CRLF and
+# the gofmt check in CI fails on files that are already formatted.
+* text=auto eol=lf
+
+# Go source is always LF.
+*.go text eol=lf
+
+# Golden files are compared byte-for-byte with program output.
+*.txt text eol=lf
+*.spr text eol=lf
