@@ -6,6 +6,7 @@ import (
 
 	"github.com/sprout-lang/sprout/internal/code"
 	"github.com/sprout-lang/sprout/internal/diag"
+	"github.com/sprout-lang/sprout/internal/object"
 	"github.com/sprout-lang/sprout/internal/parser"
 	"github.com/sprout-lang/sprout/internal/source"
 )
@@ -46,7 +47,7 @@ func nextOffset(b []byte, ip int) int {
 	case code.OpCall:
 		return ip + 2
 	case code.OpPushConst, code.OpNewEnv, code.OpGetLocal, code.OpSetLocal,
-		code.OpBuiltin, code.OpClosure, code.OpJump, code.OpJumpIfFalse,
+		code.OpBuiltin, code.OpClosure, code.OpImport, code.OpJump, code.OpJumpIfFalse,
 		code.OpJumpIfTrue, code.OpBuildList, code.OpBuildMap, code.OpIterNext:
 		return ip + 3
 	default:
@@ -222,6 +223,53 @@ func TestCompileShortCircuit(t *testing.T) {
 	main := p.Main
 	if got := opCount(t, main, code.OpDup); got != 2 {
 		t.Errorf("dup count: %d", got)
+	}
+}
+
+func TestCompileImport(t *testing.T) {
+	p, err := compileSrc(t, `let m = import "lib/math.spr"
+print(m.sqrt(2))
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	main := p.Main
+	if got := opCount(t, main, code.OpImport); got != 1 {
+		t.Errorf("import count: %d", got)
+	}
+	if got := opCount(t, main, code.OpGetIndex); got != 1 {
+		t.Errorf("get index count for member access: %d", got)
+	}
+	// The module path must live in the constant pool.
+	found := false
+	for _, c := range main.Consts {
+		if s, ok := c.(object.Str); ok && s.Value == "lib/math.spr" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("module path not in constants: %v", main.Consts)
+	}
+}
+
+func TestCompileExports(t *testing.T) {
+	p, err := compileSrc(t, "let a = 1\nconst b = 2\nfn f() { return 3 }\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.Exports == nil {
+		t.Fatal("expected an exports map")
+	}
+	for _, name := range []string{"a", "b", "f"} {
+		if _, ok := p.Exports[name]; !ok {
+			t.Errorf("export %q missing from %v", name, p.Exports)
+		}
+	}
+	if _, ok := p.Exports["print"]; ok {
+		t.Errorf("builtin 'print' should not be exported: %v", p.Exports)
+	}
+	if got := len(p.Exports); got != 3 {
+		t.Errorf("export count: got %d, want 3", got)
 	}
 }
 

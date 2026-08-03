@@ -374,6 +374,27 @@ func (n *FnExpr) Pos() source.Pos { return n.FnPos }
 func (n *FnExpr) End() source.Pos { return n.Body.End() }
 func (*FnExpr) expr()             {}
 
+// ImportExpr loads a module at runtime and returns its namespace value.
+type ImportExpr struct {
+	Path     string
+	Position source.Pos
+}
+
+func (n *ImportExpr) Pos() source.Pos { return n.Position }
+func (n *ImportExpr) End() source.Pos { return n.Position }
+func (*ImportExpr) expr()             {}
+
+// MemberExpr reads a named member of a value with the dot operator.
+type MemberExpr struct {
+	Object Expr
+	Dot    source.Pos
+	Name   *Ident
+}
+
+func (n *MemberExpr) Pos() source.Pos { return n.Object.Pos() }
+func (n *MemberExpr) End() source.Pos { return n.Name.End() }
+func (*MemberExpr) expr()             {}
+
 // Sexp renders a node as an S-expression.
 //
 // The format is used by the "sprout parse" command and by parser tests.
@@ -507,6 +528,13 @@ func (p *printer) node(n Node) {
 		p.group("fn", func() {
 			p.params(v.Params)
 			p.block(v.Body)
+		})
+	case *ImportExpr:
+		p.group("import", func() { p.atom(strconv.Quote(v.Path)) })
+	case *MemberExpr:
+		p.group("member", func() {
+			p.node(v.Object)
+			p.atom(v.Name.Name)
 		})
 	default:
 		p.atom("?")

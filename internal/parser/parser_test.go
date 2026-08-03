@@ -103,6 +103,14 @@ func TestExpressions(t *testing.T) {
 		{"-x", "(program (unary - x))"},
 		{"not x", "(program (unary not x))"},
 		{"(1 + 2) * 3", "(program (binary * (binary + (int 1) (int 2)) (int 3)))"},
+		{`let m = import "lib/math.spr"`, `(program (let m value (import "lib/math.spr")))`},
+		{"m.sqrt(2)", "(program (call (member m sqrt) (int 2)))"},
+		{"m.sqrt", "(program (member m sqrt))"},
+		{`m["sqrt"]`, `(program (index m (string "sqrt")))`},
+		{"a.b.c", "(program (member (member a b) c))"},
+		{"m.f(1).g", "(program (member (call (member m f) (int 1)) g))"},
+		{`let lib = import "lib/x.spr"
+print(lib.top())`, `(program (let lib value (import "lib/x.spr")) (call print (call (member lib top))))`},
 	}
 	for _, c := range cases {
 		expectParse(t, c.src, c.want)
@@ -181,6 +189,10 @@ func TestParseErrors(t *testing.T) {
 		{"}", "unexpected '}'"},
 		{"for i range(0, 3) { }", "expected 'in'"},
 		{"let x = 1 )", "expected a statement"},
+		{"import 5", "expected a module path after 'import'"},
+		{"m.", "expected a member name after '.'"},
+		{"m.2", "expected a member name after '.'"},
+		{"m.x = 1", "cannot assign to a module member"},
 	}
 	for _, c := range cases {
 		expectErrors(t, c.src, c.want)

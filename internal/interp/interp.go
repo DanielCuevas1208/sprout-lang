@@ -50,6 +50,9 @@ func NewWithIO(stdin io.Reader, stdout, stderr io.Writer) *Interpreter {
 // Globals returns the top-level environment.
 func (iv *Interpreter) Globals() *Env { return iv.globals }
 
+// SetModuleLoader installs the loader that import expressions use.
+func (iv *Interpreter) SetModuleLoader(l runtime.ModuleLoader) { iv.ctx.Modules = l }
+
 // RunError is a runtime error with its source position and call stack.
 type RunError struct {
 	Message string
@@ -315,9 +318,32 @@ func (iv *Interpreter) evalExpr(e ast.Expr, env *Env) object.Object {
 
 	case *ast.FnExpr:
 		return &Function{Params: n.Params, Body: n.Body, Env: env}
+
+	case *ast.ImportExpr:
+		return iv.importModule(n)
+
+	case *ast.MemberExpr:
+		obj := iv.evalExpr(n.Object, env)
+		v, err := runtime.IndexGet(obj, object.Str{Value: n.Name.Name})
+		if err != nil {
+			iv.raise(err.Error(), n.Dot)
+		}
+		return v
 	}
 	iv.raise("unsupported expression", e.Pos())
 	return nil
+}
+
+// importModule loads a module and returns its namespace value.
+func (iv *Interpreter) importModule(n *ast.ImportExpr) object.Object {
+	if iv.ctx.Modules == nil {
+		iv.raise("import is not available in this session", n.Position)
+	}
+	m, err := iv.ctx.Modules.LoadModule(iv.file, n.Path)
+	if err != nil {
+		iv.raise(err.Error(), n.Position)
+	}
+	return m
 }
 
 func (iv *Interpreter) evalUnary(n *ast.UnaryExpr, env *Env) object.Object {

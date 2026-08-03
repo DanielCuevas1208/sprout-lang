@@ -16,7 +16,9 @@ import (
 	"os"
 	"strings"
 
+	"github.com/sprout-lang/sprout/internal/ast"
 	"github.com/sprout-lang/sprout/internal/code"
+	"github.com/sprout-lang/sprout/internal/compiler"
 	"github.com/sprout-lang/sprout/internal/diag"
 	"github.com/sprout-lang/sprout/internal/object"
 	"github.com/sprout-lang/sprout/internal/runtime"
@@ -76,6 +78,9 @@ func (f *frame) pos() source.Pos {
 	return source.Pos{}
 }
 
+// SetModuleLoader installs the loader that import expressions use.
+func (vm *VM) SetModuleLoader(l runtime.ModuleLoader) { vm.ctx.Modules = l }
+
 // RunError is a runtime error with its source position and call stack.
 type RunError struct {
 	Message string
@@ -98,6 +103,9 @@ type VM struct {
 	ctx    runtime.Context
 	stack  []object.Object
 	frames []*frame
+	// file is the source file of the running program. Modules resolve
+	// their imports against it.
+	file *source.File
 }
 
 // New returns a VM wired to the process standard streams.
@@ -124,23 +132,54 @@ func NewWithIO(stdin io.Reader, stdout, stderr io.Writer) *VM {
 // It returns the final value of the entry function (usually nil) and a
 // *RunError when the program stops with a runtime error.
 func (vm *VM) Run(file *source.File, prog *code.Program) (val object.Object, rerr *RunError) {
+	_, val, rerr = vm.executeMain(file, prog.Main)
+	return val, rerr
+}
+
+// RunModule compiles and executes a module program, then snapshots its
+// top-level exports into a Module value.
+//
+// The module runs in a fresh environment. Its top-level names are read back
+// through the exports map that the compiler records on the program.
+func (vm *VM) RunModule(file *source.File, prog *ast.Program) (mod *object.Module, val object.Object, rerr *RunError) {
+	compiled, err := compiler.Compile(file, prog)
+	if err != nil {
+		return nil, nil, &RunError{Message: err.Error(), File: file}
+	}
+	env, val, rerr := vm.executeMain(file, compiled.Main)
+	if rerr != nil {
+		return nil, nil, rerr
+	}
+	exports := make(map[string]object.Object, len(compiled.Exports))
+	for name, slot := range compiled.Exports {
+		exports[name] = env.slots[slot]
+	}
+	return &object.Module{Name: file.Name, Exports: exports}, val, nil
+}
+
+// executeMain sets up the entry frame for main and runs it to completion.
+//
+// It returns the entry environment so callers can inspect top-level state.
+func (vm *VM) executeMain(file *source.File, main *code.Function) (env *Env, val object.Object, rerr *RunError) {
+	prevFile := vm.file
+	vm.file = file
 	prevStack, prevFrames := vm.stack, vm.frames
 	vm.stack = vm.stack[:0]
 	vm.frames = vm.frames[:0]
 	defer func() {
+		vm.file = prevFile
 		vm.stack = prevStack
 		vm.frames = prevFrames
 		if r := recover(); r != nil {
 			if e, ok := r.(*vmErr); ok {
-				val, rerr = nil, &RunError{Message: e.msg, File: file, Pos: e.pos, Frames: e.frames}
+				env, val, rerr = nil, nil, &RunError{Message: e.msg, File: file, Pos: e.pos, Frames: e.frames}
 				return
 			}
 			panic(r)
 		}
 	}()
 
-	main := prog.Main
-	env := &Env{slots: make([]object.Object, main.NumSlots)}
+	env = &Env{slots: make([]object.Object, main.NumSlots)}
 	vm.frames = append(vm.frames, &frame{
 		fn:   main,
 		env:  env,
@@ -148,7 +187,7 @@ func (vm *VM) Run(file *source.File, prog *code.Program) (val object.Object, rer
 		base: 0,
 	})
 	val = vm.runFrames(0)
-	return val, nil
+	return env, val, nil
 }
 
 // failAtPos aborts execution with a runtime error.
@@ -286,6 +325,19 @@ func (vm *VM) runFrames(until int) object.Object {
 			f := fn.Consts[idx].(*code.Function)
 			vm.push(&Closure{fn: f, env: fr.env})
 			fr.ip += 3
+		case code.OpImport:
+			pos := fr.pos()
+			idx := code.U16(fn.Code, fr.ip+1)
+			fr.ip += 3
+			path := fn.Consts[idx].(object.Str).Value
+			if vm.ctx.Modules == nil {
+				vm.failAtPos("import is not available in this session", pos)
+			}
+			m, err := vm.ctx.Modules.LoadModule(vm.file, path)
+			if err != nil {
+				vm.failAtPos(err.Error(), pos)
+			}
+			vm.push(m)
 		case code.OpCall:
 			n := int(fn.Code[fr.ip+1])
 			pos := fr.pos()

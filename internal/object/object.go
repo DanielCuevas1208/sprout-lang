@@ -20,6 +20,7 @@ const (
 	TypeMap      Type = "map"
 	TypeFunction Type = "function"
 	TypeRange    Type = "range"
+	TypeModule   Type = "module"
 )
 
 func (t Type) String() string { return string(t) }
@@ -176,6 +177,29 @@ func (r Range) String() string {
 		return fmt.Sprintf("range(%d, %d)", r.Start, r.End)
 	}
 	return fmt.Sprintf("range(%d, %d, %d)", r.Start, r.End, r.Step)
+}
+
+// Module is the namespace value of a loaded module.
+//
+// A module caches its exports. User code reads them with dot or index
+// access. Modules are read-only.
+type Module struct {
+	// Name is the resolved path of the module source file.
+	Name string
+	// Exports holds the module's top-level declarations.
+	Exports map[string]Object
+}
+
+func (m *Module) Type() Type { return TypeModule }
+
+// String renders a module for display, using the file base name.
+func (m *Module) String() string {
+	base := m.Name
+	if i := strings.LastIndexAny(base, `/\`); i >= 0 {
+		base = base[i+1:]
+	}
+	base = strings.TrimSuffix(base, ".spr")
+	return "<module " + base + ">"
 }
 
 // Repr renders o in a form that is close to its source literal.

@@ -1,0 +1,30 @@
+// lib/strings.spr - text helpers built on the sequences module.
+//
+// Importing this module also loads lib/sequences.spr. Modules may import
+// other modules, and each module runs only once.
+
+let seq = import "sequences.spr"
+
+fn shout(s) {
+    return upper(s) + "!"
+}
+
+fn words(s) {
+    return split(s, " ")
+}
+
+fn count_words(s) {
+    return len(words(s))
+}
+
+fn first_word(s) {
+    let parts = split(s, " ")
+    if len(parts) == 0 {
+        return ""
+    }
+    return parts[0]
+}
+
+fn even_fib(n) {
+    return seq.even(seq.fib(n))
+}

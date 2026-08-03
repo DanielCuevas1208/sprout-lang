@@ -89,6 +89,7 @@ This matches the interpreter, so closures see their own copy.
 | SET_UP | depth, slot | Store in an enclosing slot. |
 | BUILTIN | index | Push a standard function. |
 | CLOSURE | index | Capture the current environment. |
+| IMPORT | index | Load a module and push its namespace. |
 | CALL | count | Call the top value. |
 | RETURN | none | Return nil. |
 | RETURN_VALUE | none | Return the top. |
@@ -126,6 +127,22 @@ The right operand runs only when needed.
 print(0 and 1)   // prints 0
 print(1 or 2)    // prints 1
 ```
+
+## Modules
+
+The compiler lowers an import expression to one `IMPORT` instruction. The
+instruction holds the module path as a constant index. The VM loads the
+module with its loader and pushes the namespace value.
+
+A dot access compiles to the same instructions as an index read. The member
+name becomes a string constant, followed by `GET_INDEX`.
+
+```text
+let text = import "lib/strings.spr"
+print(text.shout("hi"))
+```
+
+Read `docs/modules.md` for the module system reference.
 
 ## Shared runtime
 

@@ -1,0 +1,15 @@
+// lib/sequences.spr - helpers for number sequences.
+//
+// This file is a module. Other programs and modules import it by path.
+// Its top-level declarations are its exports.
+
+fn fib(n) {
+    if n < 2 {
+        return n
+    }
+    return fib(n - 1) + fib(n - 2)
+}
+
+fn even(n) {
+    return n % 2 == 0
+}

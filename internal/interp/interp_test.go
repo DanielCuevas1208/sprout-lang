@@ -1,10 +1,13 @@
 package interp
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
+	"github.com/sprout-lang/sprout/internal/object"
 	"github.com/sprout-lang/sprout/internal/parser"
+	"github.com/sprout-lang/sprout/internal/runtime"
 	"github.com/sprout-lang/sprout/internal/source"
 )
 
@@ -364,4 +367,74 @@ print([1, "a", true, nil, 2.5])
 print({"k": [1, 2]})
 print(range(0, 3))
 `, "[1, a, true, nil, 2.5]\n{k: [1, 2]}\nrange(0, 3)\n")
+}
+
+// stubLoader serves modules from an in-memory map. It tests that the
+// interpreter evaluates import expressions through the loader hook.
+type stubLoader struct {
+	mods map[string]*object.Module
+}
+
+func (l *stubLoader) LoadModule(from *source.File, path string) (*object.Module, error) {
+	if m, ok := l.mods[path]; ok {
+		return m, nil
+	}
+	return nil, fmt.Errorf("module %q not found", path)
+}
+
+func runWithModules(src string, mods map[string]*object.Module) (string, *RunError) {
+	io := &testIO{}
+	iv := NewWithIO(strings.NewReader(""), &io.out, &io.err)
+	iv.SetModuleLoader(&stubLoader{mods: mods})
+	file := source.NewFile("test.spr", src)
+	prog, diags := parser.Parse(file)
+	if len(diags) > 0 {
+		return "", &RunError{Message: "parse error: " + diags[0].Message}
+	}
+	_, rerr := iv.Exec(file, prog)
+	return io.out.String(), rerr
+}
+
+func TestImports(t *testing.T) {
+	mod := &object.Module{
+		Name: "math.spr",
+		Exports: map[string]object.Object{
+			"answer": object.Int{Value: 42},
+			"double": &runtime.Builtin{Name: "double", MinArgs: 1, MaxArgs: 1, Fn: func(ctx *runtime.Context, args []object.Object, pos source.Pos) (object.Object, error) {
+				return object.Int{Value: runtime.AsInt(args[0]) * 2}, nil
+			}},
+		},
+	}
+	got, rerr := runWithModules(`
+let math = import "math.spr"
+print(math.answer)
+print(math.double(21))
+print(math["answer"])
+print(type(math))
+`, map[string]*object.Module{"math.spr": mod})
+	if rerr != nil {
+		t.Fatalf("runtime error: %s", rerr.Message)
+	}
+	if got != "42\n42\n42\nmodule\n" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestImportMissingMember(t *testing.T) {
+	mod := &object.Module{Name: "m.spr", Exports: map[string]object.Object{}}
+	_, rerr := runWithModules(`let m = import "m.spr"
+print(m.nope)
+`, map[string]*object.Module{"m.spr": mod})
+	if rerr == nil || !strings.Contains(rerr.Message, "no exported member") {
+		t.Errorf("error: %v", rerr)
+	}
+}
+
+func TestImportWithoutLoader(t *testing.T) {
+	_, rerr := run(`let m = import "m.spr"
+print(m.x)
+`, "")
+	if rerr == nil || !strings.Contains(rerr.Message, "import is not available") {
+		t.Errorf("error: %v", rerr)
+	}
 }

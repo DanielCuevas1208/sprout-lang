@@ -3,6 +3,7 @@
 Sprout is a small programming language that runs on Go.
 It ships with a lexer, a Pratt parser, and two execution engines.
 Version 0.2 adds a stack-based bytecode virtual machine.
+Version 0.3 adds a module system and a build tool.
 The interpreter and the VM share one runtime and one standard library.
 Sprout produces friendly diagnostics that point at the exact problem.
 
@@ -18,6 +19,8 @@ The codebase is structured to grow cleanly over time.
 - A disassembler for the compiled instruction stream.
 - Source diagnostics with a gutter, line, and caret.
 - A small standard library for real example programs.
+- A module system that splits programs across files.
+- A build tool that packages a program with its modules.
 - A REPL for interactive experiments.
 - Deterministic tests for every stage of the pipeline.
 
@@ -83,6 +86,7 @@ Run the tour in `docs/tour.md` for a full walkthrough.
 | `sprout lex file.spr` | Shows the tokens. |
 | `sprout parse file.spr` | Shows the syntax tree. |
 | `sprout check file.spr` | Checks without running. |
+| `sprout build file.spr` | Copies a program and its modules into `build/`. |
 | `sprout version` | Shows the version. |
 
 Pass a file path with no command to run it.
@@ -183,6 +187,35 @@ print(fold(nums, 0, fn(acc, x) { return acc + x }))
 
 See `docs/stdlib.md` for the full reference.
 
+## Modules
+
+Version 0.3 adds a module system. A module is a Sprout file with its own
+scope. Its top-level declarations are its exports.
+
+```sprout
+let text = import "lib/strings.spr"
+print(text.shout("hello"))
+```
+
+The import expression loads a module by path. The path is relative to the
+importing file. The result is a namespace. Read its members with a dot.
+
+A module runs once per process. The loader caches it by resolved path.
+Modules may import other modules. The loader rejects circular imports.
+
+```sprout
+sprout run examples/imports.spr
+```
+
+The `build` command packages a program with all of its modules.
+
+```text
+sprout build examples/imports.spr -o app
+sprout run app/imports.spr
+```
+
+See `docs/modules.md` for the full module reference.
+
 ## Examples
 
 The `examples` directory holds documented programs.
@@ -196,6 +229,7 @@ The `examples` directory holds documented programs.
 - `strings.spr` shows string functions.
 - `math.spr` shows numbers and rounding.
 - `higher_order.spr` uses map, filter, and fold.
+- `imports.spr` uses modules from `examples/lib`.
 - `guess.spr` is an interactive game.
 
 Each example has a golden output in `test/golden`.
@@ -218,6 +252,7 @@ internal/interp  the tree-walking interpreter
 internal/code    opcodes and the instruction stream
 internal/compiler  bytecode compiler
 internal/vm      stack-based virtual machine
+internal/module  module loading and the build graph
 internal/diag    diagnostics and rendering
 internal/repl    the interactive session
 ```
@@ -225,6 +260,7 @@ internal/repl    the interactive session
 Each stage is independent.
 The parser feeds the checker and the compiler.
 The runtime is the single source of truth for both engines.
+The module loader runs each module on the same engine kind.
 Adding a feature means updating the runtime, then both engines stay in step.
 
 ## Development
@@ -267,6 +303,7 @@ All tests pass on Go 1.22 and newer.
 | `internal/code` | Opcodes, the builder, and disassembly. |
 | `internal/compiler` | Bytecode for expressions and control flow. |
 | `internal/vm` | Execution, closures, and runtime errors. |
+| `internal/module` | Loading, caching, cycles, and the build graph. |
 | `internal/diag` | Diagnostic rendering. |
 | `test` | Example goldens, engine parity, and command line. |
 
@@ -279,7 +316,10 @@ Tests use only the standard library. They need no network or secrets.
 Version 0.2 is complete. It adds the bytecode virtual machine.
 It keeps the same parser and checker.
 
-Version 0.3 adds a module system and a build tool.
+Version 0.3 is in progress. The module system and the build tool are done.
+The build tool packages local modules into a runnable folder.
+Remaining work for 0.3 is a package registry for shared modules.
+
 Version 0.4 adds structs, methods, and interfaces.
 Version 0.5 adds result types and pattern matching.
 Version 0.6 adds concurrency with channels.
@@ -294,6 +334,8 @@ Version 0.6 adds concurrency with channels.
 - The standard library is small by design.
 - The VM materializes a loop iterable before the loop starts.
 - `break` and `continue` inside a closure are not supported.
+- Modules must be local files. There is no package registry.
+- A module runs once per process. It does not reload on change.
 
 ## License
 

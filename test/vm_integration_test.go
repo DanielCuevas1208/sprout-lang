@@ -9,6 +9,7 @@ import (
 	"github.com/sprout-lang/sprout/internal/checker"
 	"github.com/sprout-lang/sprout/internal/compiler"
 	"github.com/sprout-lang/sprout/internal/diag"
+	"github.com/sprout-lang/sprout/internal/module"
 	"github.com/sprout-lang/sprout/internal/parser"
 	"github.com/sprout-lang/sprout/internal/source"
 	"github.com/sprout-lang/sprout/internal/vm"
@@ -40,6 +41,7 @@ func vmRun(t *testing.T, path string, stdin string) (string, *vm.RunError) {
 	}
 	var stdout, stderr strings.Builder
 	machine := vm.NewWithIO(strings.NewReader(stdin), &stdout, &stderr)
+	machine.SetModuleLoader(module.NewVMLoader(strings.NewReader(stdin), &stdout, &stderr))
 	_, rerr := machine.Run(file, compiled)
 	return stdout.String(), rerr
 }

@@ -41,7 +41,7 @@ func newScope(parent *scope) *scope {
 
 // Check reports the diagnostics found in prog.
 func Check(file *source.File, prog *ast.Program) []diag.Diagnostic {
-	c := &checker{file: file}
+	c := &checker{file: file, modules: make(map[string]bool)}
 	c.checkStmts(prog.Stmts, newScope(nil))
 	return c.diags
 }
@@ -51,6 +51,8 @@ type checker struct {
 	diags     []diag.Diagnostic
 	funcDepth int
 	loopDepth int
+	// modules tracks names bound to an import expression.
+	modules map[string]bool
 }
 
 // builtinNames is the set of predeclared functions.
@@ -172,6 +174,9 @@ func (c *checker) checkLet(n *ast.LetStmt, sc *scope) {
 		if lit := literalType(n.Value); lit != "" && typeAnn != "" && !assignable(lit, typeAnn) {
 			c.errorf(n.Value.Pos(), "cannot initialize a value of type '%s' with a value of type '%s'", typeAnn, lit)
 		}
+		if _, isImport := n.Value.(*ast.ImportExpr); isImport {
+			c.modules[n.Name.Name] = true
+		}
 		c.checkExpr(n.Value, sc)
 	}
 }
@@ -208,6 +213,8 @@ func literalType(e ast.Expr) string {
 		return "list"
 	case *ast.MapLit:
 		return "map"
+	case *ast.ImportExpr:
+		return "module"
 	}
 	return ""
 }
@@ -241,6 +248,9 @@ func (c *checker) checkExpr(e ast.Expr, sc *scope) {
 				c.errorf(t.Position, "cannot assign to constant '%s'", t.Name)
 			}
 		case *ast.IndexExpr:
+			if id, ok := t.X.(*ast.Ident); ok && c.modules[id.Name] {
+				c.errorf(t.Pos(), "cannot assign to a member of a module")
+			}
 			c.checkExpr(t.X, sc)
 			c.checkExpr(t.Index, sc)
 		default:
@@ -277,6 +287,10 @@ func (c *checker) checkExpr(e ast.Expr, sc *scope) {
 		c.funcDepth++
 		c.checkStmts(n.Body.Stmts, fnScope)
 		c.funcDepth--
+	case *ast.ImportExpr:
+		// Loading happens at runtime, so there is nothing to check here.
+	case *ast.MemberExpr:
+		c.checkExpr(n.Object, sc)
 	}
 }
 

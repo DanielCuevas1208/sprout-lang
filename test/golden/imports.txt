@@ -1,0 +1,5 @@
+MODULES!
+hello
+3
+[hello, sprout, world]
+fib(6) is even: true

@@ -57,7 +57,7 @@ func TestVersion(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("version exit code %d", code)
 	}
-	if !strings.Contains(out, "0.2.0") {
+	if !strings.Contains(out, "0.3.0") {
 		t.Errorf("version output: %q", out)
 	}
 }
@@ -233,5 +233,87 @@ func TestUnknownCommand(t *testing.T) {
 	}
 	if !strings.Contains(errOut, "unknown command") {
 		t.Errorf("stderr: %q", errOut)
+	}
+}
+
+func TestRunImports(t *testing.T) {
+	out, _, code := runCLI(t, "", "run", filepath.Join("..", "examples", "imports.spr"))
+	if code != 0 {
+		t.Fatalf("run exit code %d", code)
+	}
+	if !strings.Contains(out, "MODULES!") {
+		t.Errorf("output: %q", out)
+	}
+	if !strings.Contains(out, "[hello, sprout, world]") {
+		t.Errorf("output: %q", out)
+	}
+}
+
+func TestRunVMImports(t *testing.T) {
+	out, _, code := runCLI(t, "", "vm", filepath.Join("..", "examples", "imports.spr"))
+	if code != 0 {
+		t.Fatalf("vm exit code %d", code)
+	}
+	if !strings.Contains(out, "MODULES!") {
+		t.Errorf("output: %q", out)
+	}
+	if !strings.Contains(out, "[hello, sprout, world]") {
+		t.Errorf("output: %q", out)
+	}
+}
+
+func TestBuildCopiesModuleGraph(t *testing.T) {
+	dir := t.TempDir()
+	lib := filepath.Join(dir, "lib")
+	if err := os.MkdirAll(lib, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	helper := "fn twice(x) {\n\treturn x * 2\n}\n"
+	if err := os.WriteFile(filepath.Join(lib, "helper.spr"), []byte(helper), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mainSrc := "let h = import \"lib/helper.spr\"\nprint(h.twice(21))\n"
+	mainPath := filepath.Join(dir, "app.spr")
+	if err := os.WriteFile(mainPath, []byte(mainSrc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	outDir := filepath.Join(dir, "out")
+	_, errOut, code := runCLI(t, "", "build", "-o", outDir, mainPath)
+	if code != 0 {
+		t.Fatalf("build exit code %d, stderr: %q", code, errOut)
+	}
+
+	for _, want := range []string{"app.spr", filepath.Join("lib", "helper.spr")} {
+		if _, err := os.Stat(filepath.Join(outDir, want)); err != nil {
+			t.Errorf("built tree missing %s: %v", want, err)
+		}
+	}
+
+	// The built program must run as-is.
+	out, _, code := runCLI(t, "", "run", filepath.Join(outDir, "app.spr"))
+	if code != 0 {
+		t.Fatalf("run built exit code %d", code)
+	}
+	if !strings.Contains(out, "42") {
+		t.Errorf("built output: %q", out)
+	}
+}
+
+func TestBuildErrorsOnMissingFile(t *testing.T) {
+	dir := t.TempDir()
+	_, errOut, code := runCLI(t, "", "build", filepath.Join(dir, "nope.spr"))
+	if code == 0 {
+		t.Fatalf("build should fail for a missing file")
+	}
+	if !strings.Contains(errOut, "cannot read") {
+		t.Errorf("stderr: %q", errOut)
+	}
+}
+
+func TestBuildRejectsUnknownFlags(t *testing.T) {
+	_, _, code := runCLI(t, "", "build", "-not-a-flag", "app.spr")
+	if code == 0 {
+		t.Fatalf("build should reject an unknown flag")
 	}
 }

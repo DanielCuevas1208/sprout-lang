@@ -1,6 +1,6 @@
 # Sprout Grammar
 
-This document is the formal grammar of Sprout version 0.2.
+This document is the formal grammar of Sprout version 0.3.
 
 ## Notation
 
@@ -30,6 +30,7 @@ float         := integer "." digit {digit | "_"} [exponent]
                | integer exponent
 exponent      := ("e" | "E") ["+" | "-"] digit {digit}
 identifier    := letter {letter | digit | "_"}
+import_path   := string
 ```
 
 Numbers do not start or end with an underscore.
@@ -91,21 +92,26 @@ factor        := unary {("*" | "/" | "%") unary}
 unary         := ("-" | "not") unary | power
 power         := primary ["^" unary]
 primary       := integer | float | string | "true" | "false" | "nil"
-               | identifier | fn_expr
+               | identifier | fn_expr | import_expr
                | "(" expr ")"
                | list_lit | map_lit
-               | call | index
+               | call | index | member
 ```
 
 The unary minus binds looser than power. So `-3 ^ 2` means `-(3 ^ 2)`.
 
 ```
+import_expr   := "import" import_path
 list_lit      := "[" [ expr {"," expr} [","] ] "]"
 map_lit       := "{" [ map_entry {"," map_entry} [","] ] "}"
 map_entry     := expr ":" expr
 call          := primary "(" [ expr {"," expr} [","] ] ")"
 index         := primary "[" expr "]"
+member        := primary "." identifier
 ```
+
+An import expression loads a module and returns its namespace. A member
+access reads one named export from that namespace.
 
 ## Precedence table
 
@@ -120,7 +126,7 @@ index         := primary "[" expr "]"
 | 7     | `*` `/` `%` | left        |
 | 8     | `-` `not` (prefix) | right |
 | 9     | `^`       | right         |
-| 10    | call, index | left       |
+| 10    | call, index, member (dot) | left |
 
 ## Line continuation
 

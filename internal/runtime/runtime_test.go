@@ -186,6 +186,34 @@ func TestSetIndex(t *testing.T) {
 	}
 }
 
+func TestModuleIndexing(t *testing.T) {
+	mod := &object.Module{
+		Name: "lib/math.spr",
+		Exports: map[string]object.Object{
+			"answer": intVal(42),
+			"greet":  object.Str{Value: "hi"},
+		},
+	}
+	if v := mustValue(t, func() (object.Object, error) { return IndexGet(mod, object.Str{Value: "answer"}) }); v.String() != "42" {
+		t.Errorf("module member: got %s", v)
+	}
+	if _, err := IndexGet(mod, object.Str{Value: "missing"}); err == nil || !strings.Contains(err.Error(), "no exported member") {
+		t.Errorf("missing module member: %v", err)
+	}
+	if _, err := IndexGet(mod, intVal(0)); err == nil || !strings.Contains(err.Error(), "string") {
+		t.Errorf("module bad key: %v", err)
+	}
+	if _, err := SetIndex(mod, object.Str{Value: "answer"}, intVal(1)); err == nil || !strings.Contains(err.Error(), "cannot assign to a member of a module") {
+		t.Errorf("module set index: %v", err)
+	}
+	if mod.String() != "<module math>" {
+		t.Errorf("module string: %q", mod.String())
+	}
+	if mod.Type().String() != "module" {
+		t.Errorf("module type: %q", mod.Type().String())
+	}
+}
+
 func TestSequence(t *testing.T) {
 	list := &object.List{Elems: []object.Object{intVal(1), intVal(2)}}
 	seq, err := Sequence(list)

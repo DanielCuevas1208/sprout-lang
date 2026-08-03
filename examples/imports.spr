@@ -1,0 +1,15 @@
+// imports.spr - using modules from the local library.
+//
+// The import expression loads a module by path and returns its namespace.
+// Relative paths resolve against this file's directory.
+//
+// Run: sprout run examples/imports.spr
+
+let text = import "lib/strings.spr"
+
+let line = "hello sprout world"
+print(text.shout("modules"))
+print(text.first_word(line))
+print(text.count_words(line))
+print(text.words(line))
+print("fib(6) is even:", text.even_fib(6))

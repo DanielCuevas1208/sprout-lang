@@ -10,6 +10,7 @@ import (
 	"github.com/sprout-lang/sprout/internal/checker"
 	"github.com/sprout-lang/sprout/internal/diag"
 	"github.com/sprout-lang/sprout/internal/interp"
+	"github.com/sprout-lang/sprout/internal/module"
 	"github.com/sprout-lang/sprout/internal/parser"
 	"github.com/sprout-lang/sprout/internal/source"
 )
@@ -33,6 +34,7 @@ func compileAndRun(t *testing.T, path string, stdin string) (string, *interp.Run
 	}
 	var stdout, stderr strings.Builder
 	iv := interp.NewWithIO(strings.NewReader(stdin), &stdout, &stderr)
+	iv.SetModuleLoader(module.NewInterpLoader(strings.NewReader(stdin), &stdout, &stderr))
 	_, rerr := iv.Exec(file, prog)
 	return stdout.String(), rerr
 }
