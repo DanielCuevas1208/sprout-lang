@@ -1,18 +1,22 @@
 # Sprout
 
 Sprout is a small programming language that runs on Go.
-It ships with a lexer, a Pratt parser, and a tree-walking interpreter.
-It produces friendly diagnostics that point at the exact problem.
+It ships with a lexer, a Pratt parser, and two execution engines.
+Version 0.2 adds a stack-based bytecode virtual machine.
+The interpreter and the VM share one runtime and one standard library.
+Sprout produces friendly diagnostics that point at the exact problem.
 
 The goal is a language that is easy to learn and easy to read.
 The design favors a short standard library over magic.
-You can grow this codebase into a bytecode virtual machine.
+The codebase is structured to grow cleanly over time.
 
 ## Highlights
 
 - A documented grammar with a line-aware Pratt parser.
+- A bytecode compiler and a stack-based virtual machine.
+- A tree-walking interpreter that shares the runtime with the VM.
+- A disassembler for the compiled instruction stream.
 - Source diagnostics with a gutter, line, and caret.
-- A tree-walking interpreter with closures and lexical scope.
 - A small standard library for real example programs.
 - A REPL for interactive experiments.
 - Deterministic tests for every stage of the pipeline.
@@ -25,10 +29,16 @@ You need Go 1.22 or newer.
 go build ./cmd/sprout
 ```
 
-Run an example program.
+Run an example program on the interpreter.
 
 ```text
 ./sprout run examples/fizzbuzz.spr
+```
+
+Run the same program on the bytecode virtual machine.
+
+```text
+./sprout vm examples/fizzbuzz.spr
 ```
 
 Start an interactive session.
@@ -66,7 +76,9 @@ Run the tour in `docs/tour.md` for a full walkthrough.
 
 | Command | Purpose |
 |---------|---------|
-| `sprout run file.spr` | Runs a program. |
+| `sprout run file.spr` | Runs a program on the interpreter. |
+| `sprout vm file.spr` | Runs a program on the bytecode VM. |
+| `sprout dis file.spr` | Shows the compiled bytecode. |
 | `sprout repl` | Starts a session. |
 | `sprout lex file.spr` | Shows the tokens. |
 | `sprout parse file.spr` | Shows the syntax tree. |
@@ -104,6 +116,7 @@ error: cannot divide by zero
 
 The checker finds problems before the program runs.
 It reports undefined names, bad constants, and misplaced control flow.
+Both engines report runtime errors in this format.
 
 ## Language at a glance
 
@@ -128,6 +141,33 @@ print(next())   // 2
 Only `nil` and `false` are falsy.
 An expression ends at a newline unless it is inside brackets.
 See `docs/grammar.md` for the formal grammar.
+
+## Bytecode virtual machine
+
+Version 0.2 adds a compiler and a stack-based virtual machine.
+The compiler turns a syntax tree into bytecode.
+The VM executes that bytecode with an operand stack and call frames.
+Both engines share the runtime, so they behave identically.
+
+The `dis` command shows the compiled instructions.
+
+```text
+$ sprout dis examples/hello.spr
+== fn <main> ==
+Params:
+Slots:  1
+0000  PUSH_CONST  ; examples/hello.spr:5:12  0  (world)
+0003  SET_LOCAL  ; examples/hello.spr:5:1  0
+0006  BUILTIN  ; examples/hello.spr:7:1  0  (print)
+0009  PUSH_CONST  ; examples/hello.spr:7:7  1  (hello, )
+0012  GET_LOCAL  ; examples/hello.spr:7:19  0
+0015  ADD  ; examples/hello.spr:7:17
+0016  CALL  ; examples/hello.spr:7:6  1
+```
+
+Each line shows the offset, the opcode, and the source position.
+The engine parity tests prove the VM matches the interpreter.
+See `docs/bytecode.md` for the full reference.
 
 ## Standard library
 
@@ -159,10 +199,11 @@ The `examples` directory holds documented programs.
 - `guess.spr` is an interactive game.
 
 Each example has a golden output in `test/golden`.
+Both engines must match the goldens.
 
 ## Architecture
 
-The repository is a small pipeline of Go packages.
+The repository is a pipeline of small Go packages.
 
 ```text
 cmd/sprout     command line interface
@@ -172,15 +213,19 @@ internal/lexer   the scanner
 internal/ast     the syntax tree
 internal/parser  the Pratt parser
 internal/checker static analysis
-internal/object  runtime values
+internal/runtime value semantics and the standard library
 internal/interp  the tree-walking interpreter
+internal/code    opcodes and the instruction stream
+internal/compiler  bytecode compiler
+internal/vm      stack-based virtual machine
 internal/diag    diagnostics and rendering
 internal/repl    the interactive session
 ```
 
-Each stage is independent. The parser can grow into a compiler.
-The interpreter evaluates the tree directly.
-A later release can replace it with a bytecode virtual machine.
+Each stage is independent.
+The parser feeds the checker and the compiler.
+The runtime is the single source of truth for both engines.
+Adding a feature means updating the runtime, then both engines stay in step.
 
 ## Development
 
@@ -205,7 +250,7 @@ go test ./...
 Run a single package.
 
 ```text
-go test ./internal/interp/
+go test ./internal/vm/
 ```
 
 ## Test status
@@ -217,16 +262,23 @@ All tests pass on Go 1.22 and newer.
 | `internal/lexer` | Tokens, positions, and lexer errors. |
 | `internal/parser` | Precedence, statements, and recovery. |
 | `internal/checker` | Scope and static errors. |
+| `internal/runtime` | Arithmetic, comparison, and indexing. |
 | `internal/interp` | Evaluation, closures, and runtime errors. |
+| `internal/code` | Opcodes, the builder, and disassembly. |
+| `internal/compiler` | Bytecode for expressions and control flow. |
+| `internal/vm` | Execution, closures, and runtime errors. |
 | `internal/diag` | Diagnostic rendering. |
-| `test` | Example goldens and command line behavior. |
+| `test` | Example goldens, engine parity, and command line. |
 
+The parity tests run each program on both engines.
+The VM tests match the same goldens as the interpreter.
 Tests use only the standard library. They need no network or secrets.
 
 ## Roadmap
 
-Version 0.2 adds a stack-based bytecode virtual machine.
+Version 0.2 is complete. It adds the bytecode virtual machine.
 It keeps the same parser and checker.
+
 Version 0.3 adds a module system and a build tool.
 Version 0.4 adds structs, methods, and interfaces.
 Version 0.5 adds result types and pattern matching.
@@ -240,6 +292,8 @@ Version 0.6 adds concurrency with channels.
 - Integer division truncates toward zero.
 - There is no tail-call optimization.
 - The standard library is small by design.
+- The VM materializes a loop iterable before the loop starts.
+- `break` and `continue` inside a closure are not supported.
 
 ## License
 

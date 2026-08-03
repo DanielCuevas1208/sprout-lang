@@ -1,0 +1,14 @@
+# Force LF line endings on every checkout.
+#
+# Windows git converts text files to CRLF when core.autocrlf is true. The
+# gofmt check in CI compares files byte for byte, so a CRLF checkout fails
+# on files that are already formatted. These rules make the checkout form
+# stable on every platform.
+
+* text=auto eol=lf
+*.go text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+*.spr text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf

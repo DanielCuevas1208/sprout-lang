@@ -1,17 +1,20 @@
 // Package interp is the tree-walking interpreter for Sprout.
+//
+// The interpreter shares its value semantics and standard library with the
+// bytecode virtual machine through the runtime package. It evaluates the AST
+// directly and keeps a single source of truth for arithmetic, comparison,
+// indexing, and iteration behavior.
 package interp
 
 import (
-	"bufio"
 	"fmt"
 	"io"
-	"math"
 	"os"
-	"strings"
 
 	"github.com/sprout-lang/sprout/internal/ast"
 	"github.com/sprout-lang/sprout/internal/diag"
 	"github.com/sprout-lang/sprout/internal/object"
+	"github.com/sprout-lang/sprout/internal/runtime"
 	"github.com/sprout-lang/sprout/internal/source"
 	"github.com/sprout-lang/sprout/internal/token"
 )
@@ -20,10 +23,7 @@ import (
 type Interpreter struct {
 	globals *Env
 	file    *source.File
-	stdin   io.Reader
-	stdout  io.Writer
-	stderr  io.Writer
-	input   *bufio.Reader
+	ctx     runtime.Context
 	frames  []diag.Frame
 }
 
@@ -34,11 +34,14 @@ func New() *Interpreter {
 
 // NewWithIO returns an interpreter with explicit streams.
 func NewWithIO(stdin io.Reader, stdout, stderr io.Writer) *Interpreter {
-	iv := &Interpreter{
-		globals: NewEnv(nil),
-		stdin:   stdin,
-		stdout:  stdout,
-		stderr:  stderr,
+	iv := &Interpreter{globals: NewEnv(nil)}
+	iv.ctx = runtime.Context{
+		Stdin:  stdin,
+		Stdout: stdout,
+		Stderr: stderr,
+		Call: func(fn object.Object, args []object.Object, pos source.Pos) object.Object {
+			return iv.call(fn, args, pos)
+		},
 	}
 	RegisterBuiltins(iv)
 	return iv
@@ -187,11 +190,11 @@ func (iv *Interpreter) evalStmt(s ast.Stmt, env *Env) object.Object {
 		panic(&continueSignal{pos: n.Position})
 
 	case *ast.IfStmt:
-		if truthy(iv.evalExpr(n.Cond, env)) {
+		if runtime.Truthy(iv.evalExpr(n.Cond, env)) {
 			return iv.evalBlock(n.Then, env)
 		}
 		for _, b := range n.Elifs {
-			if truthy(iv.evalExpr(b.Cond, env)) {
+			if runtime.Truthy(iv.evalExpr(b.Cond, env)) {
 				return iv.evalBlock(b.Body, env)
 			}
 		}
@@ -202,7 +205,7 @@ func (iv *Interpreter) evalStmt(s ast.Stmt, env *Env) object.Object {
 
 	case *ast.WhileStmt:
 		for {
-			if !truthy(iv.evalExpr(n.Cond, env)) {
+			if !runtime.Truthy(iv.evalExpr(n.Cond, env)) {
 				return object.NilValue
 			}
 			if iv.runLoopBody(n.Body, env) {
@@ -212,7 +215,7 @@ func (iv *Interpreter) evalStmt(s ast.Stmt, env *Env) object.Object {
 
 	case *ast.ForInStmt:
 		iterable := iv.evalExpr(n.Iterable, env)
-		items, err := iv.toSeq(iterable)
+		items, err := runtime.Sequence(iterable)
 		if err != nil {
 			iv.raise(err.Error(), n.Iterable.Pos())
 		}
@@ -245,32 +248,6 @@ func (iv *Interpreter) runLoopBody(body *ast.Block, env *Env) (broken bool) {
 	}()
 	iv.evalBlock(body, env)
 	return false
-}
-
-// toSeq materializes an iterable value as a slice.
-func (iv *Interpreter) toSeq(o object.Object) ([]object.Object, error) {
-	switch v := o.(type) {
-	case *object.List:
-		return v.Elems, nil
-	case object.Str:
-		runes := []rune(v.Value)
-		out := make([]object.Object, len(runes))
-		for i, r := range runes {
-			out[i] = object.Str{Value: string(r)}
-		}
-		return out, nil
-	case object.Range:
-		var out []object.Object
-		step := v.Step
-		if step == 0 {
-			step = 1
-		}
-		for i := v.Start; i < v.End; i += step {
-			out = append(out, object.Int{Value: i})
-		}
-		return out, nil
-	}
-	return nil, fmtErr("cannot iterate a %s", o.Type())
 }
 
 func (iv *Interpreter) evalExpr(e ast.Expr, env *Env) object.Object {
@@ -330,7 +307,11 @@ func (iv *Interpreter) evalExpr(e ast.Expr, env *Env) object.Object {
 	case *ast.IndexExpr:
 		container := iv.evalExpr(n.X, env)
 		idx := iv.evalExpr(n.Index, env)
-		return iv.indexGet(container, idx, n.Lbracket)
+		v, err := runtime.IndexGet(container, idx)
+		if err != nil {
+			iv.raise(err.Error(), n.Lbracket)
+		}
+		return v
 
 	case *ast.FnExpr:
 		return &Function{Params: n.Params, Body: n.Body, Env: env}
@@ -352,7 +333,7 @@ func (iv *Interpreter) evalUnary(n *ast.UnaryExpr, env *Env) object.Object {
 			iv.raise(fmt.Sprintf("cannot negate a %s", v.Type()), n.OpPos)
 		}
 	case token.NOT:
-		return object.Bool{Value: !truthy(iv.evalExpr(n.X, env))}
+		return object.Bool{Value: !runtime.Truthy(iv.evalExpr(n.X, env))}
 	}
 	iv.raise("unsupported unary operator", n.OpPos)
 	return nil
@@ -363,12 +344,12 @@ func (iv *Interpreter) evalBinary(n *ast.BinaryExpr, env *Env) object.Object {
 
 	switch n.Op {
 	case token.AND:
-		if !truthy(left) {
+		if !runtime.Truthy(left) {
 			return left
 		}
 		return iv.evalExpr(n.Right, env)
 	case token.OR:
-		if truthy(left) {
+		if runtime.Truthy(left) {
 			return left
 		}
 		return iv.evalExpr(n.Right, env)
@@ -378,189 +359,54 @@ func (iv *Interpreter) evalBinary(n *ast.BinaryExpr, env *Env) object.Object {
 
 	switch n.Op {
 	case token.PLUS:
-		return iv.add(left, right, n.OpPos)
+		return iv.arith(left, right, n.OpPos, runtime.Add)
 	case token.MINUS:
-		return iv.sub(left, right, n.OpPos)
+		return iv.arith(left, right, n.OpPos, runtime.Sub)
 	case token.STAR:
-		return iv.mul(left, right, n.OpPos)
+		return iv.arith(left, right, n.OpPos, runtime.Mul)
 	case token.SLASH:
-		return iv.div(left, right, n.OpPos)
+		return iv.arith(left, right, n.OpPos, runtime.Div)
 	case token.PERCENT:
-		return iv.mod(left, right, n.OpPos)
+		return iv.arith(left, right, n.OpPos, runtime.Mod)
 	case token.CARET:
-		return iv.pow(left, right, n.OpPos)
+		return iv.arith(left, right, n.OpPos, runtime.Pow)
 	case token.EQ:
-		return object.Bool{Value: objectEqual(left, right)}
+		return object.Bool{Value: runtime.Equal(left, right)}
 	case token.NEQ:
-		return object.Bool{Value: !objectEqual(left, right)}
+		return object.Bool{Value: !runtime.Equal(left, right)}
 	case token.LT, token.LE, token.GT, token.GE:
-		return iv.compare(left, right, n.Op, n.OpPos)
+		cmp, ok := runtime.Compare(left, right)
+		if !ok {
+			iv.raise(fmt.Sprintf("cannot compare %s with %s", left.Type(), right.Type()), n.OpPos)
+		}
+		return object.Bool{Value: cmpResult(cmp, n.Op)}
 	}
 	iv.raise("unsupported binary operator", n.OpPos)
 	return nil
 }
 
-func (iv *Interpreter) add(a, b object.Object, pos source.Pos) object.Object {
-	switch x := a.(type) {
-	case object.Int:
-		switch y := b.(type) {
-		case object.Int:
-			return object.Int{Value: x.Value + y.Value}
-		case object.Float:
-			return object.Float{Value: float64(x.Value) + y.Value}
-		}
-	case object.Float:
-		switch y := b.(type) {
-		case object.Int:
-			return object.Float{Value: x.Value + float64(y.Value)}
-		case object.Float:
-			return object.Float{Value: x.Value + y.Value}
-		}
-	case object.Str:
-		if y, ok := b.(object.Str); ok {
-			return object.Str{Value: x.Value + y.Value}
-		}
+// arith runs an arithmetic operation and raises a runtime error on failure.
+func (iv *Interpreter) arith(a, b object.Object, pos source.Pos, op func(a, b object.Object) (object.Object, error)) object.Object {
+	v, err := op(a, b)
+	if err != nil {
+		iv.raise(err.Error(), pos)
 	}
-	iv.raise(fmt.Sprintf("cannot add %s and %s", a.Type(), b.Type()), pos)
-	return nil
+	return v
 }
 
-func (iv *Interpreter) sub(a, b object.Object, pos source.Pos) object.Object {
-	if an, af, aNum := asNumber(a); aNum {
-		if bn, bf, bNum := asNumber(b); bNum {
-			if _, aF := a.(object.Float); aF {
-				return object.Float{Value: af - bf}
-			}
-			if _, bF := b.(object.Float); bF {
-				return object.Float{Value: af - bf}
-			}
-			return object.Int{Value: an - bn}
-		}
-	}
-	iv.raise(fmt.Sprintf("cannot subtract %s from %s", b.Type(), a.Type()), pos)
-	return nil
-}
-
-func (iv *Interpreter) mul(a, b object.Object, pos source.Pos) object.Object {
-	if an, af, aNum := asNumber(a); aNum {
-		if bn, bf, bNum := asNumber(b); bNum {
-			if _, aF := a.(object.Float); aF {
-				return object.Float{Value: af * bf}
-			}
-			if _, bF := b.(object.Float); bF {
-				return object.Float{Value: af * bf}
-			}
-			return object.Int{Value: an * bn}
-		}
-	}
-	iv.raise(fmt.Sprintf("cannot multiply %s and %s", a.Type(), b.Type()), pos)
-	return nil
-}
-
-func (iv *Interpreter) div(a, b object.Object, pos source.Pos) object.Object {
-	if _, _, aNum := asNumber(a); !aNum {
-		iv.raise(fmt.Sprintf("cannot divide a %s", a.Type()), pos)
-	}
-	bn, bf, bNum := asNumber(b)
-	if !bNum {
-		iv.raise(fmt.Sprintf("cannot divide by a %s", b.Type()), pos)
-	}
-	if (bn == 0 && !isFloat(b)) || (bNum && isFloat(b) && bf == 0) {
-		iv.raise("cannot divide by zero", pos)
-	}
-	if _, aF := a.(object.Float); aF {
-		af := asFloat(a)
-		return object.Float{Value: af / bf}
-	}
-	if _, bF := b.(object.Float); bF {
-		return object.Float{Value: asFloat(a) / bf}
-	}
-	return object.Int{Value: asInt(a) / bn}
-}
-
-func (iv *Interpreter) mod(a, b object.Object, pos source.Pos) object.Object {
-	if _, _, aNum := asNumber(a); !aNum {
-		iv.raise(fmt.Sprintf("cannot take the remainder of a %s", a.Type()), pos)
-	}
-	if _, _, bNum := asNumber(b); !bNum {
-		iv.raise(fmt.Sprintf("cannot take the remainder by a %s", b.Type()), pos)
-	}
-	if _, aF := a.(object.Float); aF {
-		bf := asFloat(b)
-		if bf == 0 {
-			iv.raise("cannot take the remainder by zero", pos)
-		}
-		return object.Float{Value: floatMod(asFloat(a), bf)}
-	}
-	if _, bF := b.(object.Float); bF {
-		if bf := asFloat(b); bf == 0 {
-			iv.raise("cannot take the remainder by zero", pos)
-		}
-		return object.Float{Value: floatMod(asFloat(a), asFloat(b))}
-	}
-	bn := asInt(b)
-	if bn == 0 {
-		iv.raise("cannot take the remainder by zero", pos)
-	}
-	return object.Int{Value: asInt(a) % bn}
-}
-
-func (iv *Interpreter) pow(a, b object.Object, pos source.Pos) object.Object {
-	if _, _, aNum := asNumber(a); !aNum {
-		iv.raise(fmt.Sprintf("cannot raise a %s to a power", a.Type()), pos)
-	}
-	if _, _, bNum := asNumber(b); !bNum {
-		iv.raise(fmt.Sprintf("cannot raise to a %s power", b.Type()), pos)
-	}
-	if _, aF := a.(object.Float); aF {
-		return object.Float{Value: floatPow(asFloat(a), asFloat(b))}
-	}
-	if _, bF := b.(object.Float); bF {
-		return object.Float{Value: floatPow(asFloat(a), asFloat(b))}
-	}
-	exponent := asInt(b)
-	if exponent < 0 {
-		return object.Float{Value: floatPow(asFloat(a), asFloat(b))}
-	}
-	return object.Int{Value: intPow(asInt(a), exponent)}
-}
-
-func (iv *Interpreter) compare(a, b object.Object, op token.Kind, pos source.Pos) object.Object {
-	cmp, ok := compareValues(a, b)
-	if !ok {
-		iv.raise(fmt.Sprintf("cannot compare %s with %s", a.Type(), b.Type()), pos)
-	}
+// cmpResult turns a comparison result into a boolean.
+func cmpResult(cmp int, op token.Kind) bool {
 	switch op {
 	case token.LT:
-		return object.Bool{Value: cmp < 0}
+		return cmp < 0
 	case token.LE:
-		return object.Bool{Value: cmp <= 0}
+		return cmp <= 0
 	case token.GT:
-		return object.Bool{Value: cmp > 0}
+		return cmp > 0
 	case token.GE:
-		return object.Bool{Value: cmp >= 0}
+		return cmp >= 0
 	}
-	return object.Bool{Value: false}
-}
-
-// compareValues compares a and b, reporting whether they are comparable.
-func compareValues(a, b object.Object) (int, bool) {
-	if _, af, aNum := asNumber(a); aNum {
-		if _, bf, bNum := asNumber(b); bNum {
-			switch {
-			case isFloat(a), isFloat(b):
-				return compareFloats(af, bf), true
-			default:
-				return compareInts(asInt(a), asInt(b)), true
-			}
-		}
-	}
-	if as, aStr := a.(object.Str); aStr {
-		if bs, bStr := b.(object.Str); bStr {
-			return strings.Compare(as.Value, bs.Value), true
-		}
-	}
-	return 0, false
+	return false
 }
 
 func (iv *Interpreter) evalAssign(n *ast.AssignExpr, env *Env) object.Object {
@@ -576,64 +422,13 @@ func (iv *Interpreter) evalAssign(n *ast.AssignExpr, env *Env) object.Object {
 	case *ast.IndexExpr:
 		container := iv.evalExpr(t.X, env)
 		idx := iv.evalExpr(t.Index, env)
-		switch c := container.(type) {
-		case *object.List:
-			i, ok := asIntIndex(idx)
-			if !ok {
-				iv.raise("list index must be an integer", n.OpPos)
-			}
-			if i < 0 || i >= int64(len(c.Elems)) {
-				iv.raise(fmt.Sprintf("list index %d out of range (length %d)", i, len(c.Elems)), n.OpPos)
-			}
-			c.Elems[i] = value
-			return value
-		case *object.Map:
-			ks, ok := idx.(object.Str)
-			if !ok {
-				iv.raise("map key must be a string", n.OpPos)
-			}
-			c.Set(ks.Value, value)
-			return value
-		default:
-			iv.raise(fmt.Sprintf("cannot assign to an index of a %s", container.Type()), n.OpPos)
+		v, err := runtime.SetIndex(container, idx, value)
+		if err != nil {
+			iv.raise(err.Error(), n.OpPos)
 		}
+		return v
 	}
 	iv.raise("invalid assignment target", n.OpPos)
-	return nil
-}
-
-func (iv *Interpreter) indexGet(container, idx object.Object, pos source.Pos) object.Object {
-	switch c := container.(type) {
-	case *object.List:
-		i, ok := asIntIndex(idx)
-		if !ok {
-			iv.raise("list index must be an integer", pos)
-		}
-		if i < 0 || i >= int64(len(c.Elems)) {
-			iv.raise(fmt.Sprintf("list index %d out of range (length %d)", i, len(c.Elems)), pos)
-		}
-		return c.Elems[i]
-	case object.Str:
-		i, ok := asIntIndex(idx)
-		if !ok {
-			iv.raise("string index must be an integer", pos)
-		}
-		runes := []rune(c.Value)
-		if i < 0 || i >= int64(len(runes)) {
-			iv.raise(fmt.Sprintf("string index %d out of range (length %d)", i, len(runes)), pos)
-		}
-		return object.Str{Value: string(runes[i])}
-	case *object.Map:
-		ks, ok := idx.(object.Str)
-		if !ok {
-			iv.raise("map key must be a string", pos)
-		}
-		if v, exists := c.Get(ks.Value); exists {
-			return v
-		}
-		return object.NilValue
-	}
-	iv.raise(fmt.Sprintf("cannot index a %s", container.Type()), pos)
 	return nil
 }
 
@@ -661,11 +456,11 @@ func (iv *Interpreter) call(callee object.Object, args []object.Object, pos sour
 		}()
 		return iv.evalBlock(fn.Body, callEnv)
 
-	case *Builtin:
-		if len(args) < fn.MinArgs || (fn.MaxArgs >= 0 && len(args) > fn.MaxArgs) {
-			iv.raise(fmt.Sprintf("function '%s' expects %d arguments, got %d", fn.Name, fn.MinArgs, len(args)), pos)
+	case *runtime.Builtin:
+		if err := fn.CheckArgs(args, fn.Name); err != nil {
+			iv.raise(err.Error(), pos)
 		}
-		v, err := fn.Fn(args, pos)
+		v, err := fn.Fn(&iv.ctx, args, pos)
 		if err != nil {
 			iv.raise(err.Error(), pos)
 		}
@@ -685,161 +480,4 @@ func (iv *Interpreter) pushFrame(name string, pos source.Pos) {
 
 func (iv *Interpreter) popFrame() {
 	iv.frames = iv.frames[:len(iv.frames)-1]
-}
-
-// truthy reports whether o counts as true in a condition.
-//
-// Only nil and false are falsy.
-func truthy(o object.Object) bool {
-	switch v := o.(type) {
-	case object.Nil:
-		return false
-	case object.Bool:
-		return v.Value
-	}
-	return true
-}
-
-func objectEqual(a, b object.Object) bool {
-	if a == nil || b == nil {
-		return a == b
-	}
-	if a.Type() != b.Type() {
-		an, af, aNum := asNumber(a)
-		bn, bf, bNum := asNumber(b)
-		if aNum && bNum {
-			if isFloat(a) || isFloat(b) {
-				return af == bf
-			}
-			return an == bn
-		}
-		return false
-	}
-	switch x := a.(type) {
-	case object.Int:
-		return x.Value == b.(object.Int).Value
-	case object.Float:
-		return x.Value == b.(object.Float).Value
-	case object.Str:
-		return x.Value == b.(object.Str).Value
-	case object.Bool:
-		return x.Value == b.(object.Bool).Value
-	case object.Nil:
-		return true
-	case object.Range:
-		y := b.(object.Range)
-		return x == y
-	case *object.List:
-		y := b.(*object.List)
-		if len(x.Elems) != len(y.Elems) {
-			return false
-		}
-		for i := range x.Elems {
-			if !objectEqual(x.Elems[i], y.Elems[i]) {
-				return false
-			}
-		}
-		return true
-	case *object.Map:
-		y := b.(*object.Map)
-		if len(x.Keys) != len(y.Keys) {
-			return false
-		}
-		for i, k := range x.Keys {
-			if k != y.Keys[i] {
-				return false
-			}
-			if !objectEqual(x.Vals[k], y.Vals[k]) {
-				return false
-			}
-		}
-		return true
-	case *Function:
-		return a == b
-	case *Builtin:
-		return a == b
-	}
-	return false
-}
-
-func asNumber(o object.Object) (int64, float64, bool) {
-	switch v := o.(type) {
-	case object.Int:
-		return v.Value, float64(v.Value), true
-	case object.Float:
-		return 0, v.Value, true
-	}
-	return 0, 0, false
-}
-
-func asInt(o object.Object) int64 {
-	if v, ok := o.(object.Int); ok {
-		return v.Value
-	}
-	return 0
-}
-
-func asFloat(o object.Object) float64 {
-	if v, ok := o.(object.Float); ok {
-		return v.Value
-	}
-	if v, ok := o.(object.Int); ok {
-		return float64(v.Value)
-	}
-	return 0
-}
-
-func isFloat(o object.Object) bool {
-	_, ok := o.(object.Float)
-	return ok
-}
-
-func asIntIndex(o object.Object) (int64, bool) {
-	if v, ok := o.(object.Int); ok {
-		return v.Value, true
-	}
-	return 0, false
-}
-
-func compareInts(a, b int64) int {
-	switch {
-	case a < b:
-		return -1
-	case a > b:
-		return 1
-	}
-	return 0
-}
-
-func compareFloats(a, b float64) int {
-	switch {
-	case a < b:
-		return -1
-	case a > b:
-		return 1
-	}
-	return 0
-}
-
-func floatMod(a, b float64) float64 {
-	return math.Mod(a, b)
-}
-
-func floatPow(a, b float64) float64 {
-	return math.Pow(a, b)
-}
-
-// intPow raises base to a non-negative integer exponent.
-func intPow(base, exponent int64) int64 {
-	result := int64(1)
-	for exponent > 0 {
-		if exponent&1 == 1 {
-			result *= base
-		}
-		exponent >>= 1
-		if exponent > 0 {
-			base *= base
-		}
-	}
-	return result
 }

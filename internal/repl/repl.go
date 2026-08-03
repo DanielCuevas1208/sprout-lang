@@ -14,7 +14,7 @@ import (
 	"github.com/sprout-lang/sprout/internal/source"
 )
 
-const version = "0.1.0"
+const version = "0.2.0"
 
 // Run starts an interactive session and returns when the user leaves.
 //
