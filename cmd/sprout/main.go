@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/sprout-lang/sprout/internal/ast"
@@ -15,6 +16,7 @@ import (
 	"github.com/sprout-lang/sprout/internal/diag"
 	"github.com/sprout-lang/sprout/internal/interp"
 	"github.com/sprout-lang/sprout/internal/lexer"
+	"github.com/sprout-lang/sprout/internal/module"
 	"github.com/sprout-lang/sprout/internal/parser"
 	"github.com/sprout-lang/sprout/internal/repl"
 	"github.com/sprout-lang/sprout/internal/source"
@@ -22,7 +24,7 @@ import (
 	"github.com/sprout-lang/sprout/internal/vm"
 )
 
-const version = "0.2.0"
+const version = "0.3.0"
 
 func main() {
 	os.Exit(run(os.Args[1:]))
@@ -47,6 +49,8 @@ func run(args []string) int {
 		return runParse(args[1:])
 	case "check":
 		return runCheck(args[1:])
+	case "build":
+		return runBuild(args[1:])
 	case "version", "--version", "-v":
 		fmt.Println("sprout " + version)
 		return 0
@@ -75,10 +79,14 @@ func usage(w io.Writer) {
 	fmt.Fprintln(w, "  sprout lex <file.spr>      show the tokens of a file")
 	fmt.Fprintln(w, "  sprout parse <file.spr>    show the syntax tree of a file")
 	fmt.Fprintln(w, "  sprout check <file.spr>    check a file without running it")
+	fmt.Fprintln(w, "  sprout build <file.spr>    copy a program and its modules into build/")
 	fmt.Fprintln(w, "  sprout version             show the version")
 	fmt.Fprintln(w)
 	fmt.Fprintln(w, "Options for run, vm, dis, lex, parse, and check:")
 	fmt.Fprintln(w, "  -color auto|always|never   control colored diagnostics")
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Options for build:")
+	fmt.Fprintln(w, "  -o <dir>                   set the output directory (default build)")
 }
 
 func looksLikeFile(name string) bool {
@@ -144,6 +152,7 @@ func runFile(args []string) int {
 	}
 
 	iv := interp.NewWithIO(os.Stdin, os.Stdout, os.Stderr)
+	iv.SetModuleLoader(module.NewInterpLoader(os.Stdin, os.Stdout, os.Stderr))
 	_, rerr := iv.Exec(file, prog)
 	if rerr != nil {
 		printRunError(os.Stderr, rep, rerr.Message, rerr.File, rerr.Pos, rerr.Frames)
@@ -178,6 +187,7 @@ func runVM(args []string) int {
 	}
 
 	machine := vm.NewWithIO(os.Stdin, os.Stdout, os.Stderr)
+	machine.SetModuleLoader(module.NewVMLoader(os.Stdin, os.Stdout, os.Stderr))
 	_, rerr := machine.Run(file, compiled)
 	if rerr != nil {
 		printRunError(os.Stderr, rep, rerr.Message, rerr.File, rerr.Pos, rerr.Frames)
@@ -305,10 +315,78 @@ func runCheck(args []string) int {
 
 func runRepl() int {
 	iv := interp.NewWithIO(os.Stdin, os.Stdout, os.Stderr)
+	iv.SetModuleLoader(module.NewInterpLoader(os.Stdin, os.Stdout, os.Stderr))
 	if err := repl.Run(iv, os.Stdin, os.Stdout, os.Stderr); err != nil {
 		fmt.Fprintf(os.Stderr, "sprout: %v\n", err)
 		return 1
 	}
+	return 0
+}
+
+// runBuild copies a program and its module graph into an output directory.
+//
+// The output tree mirrors the source tree, so the built program runs as-is
+// with imports resolved relative to the entry file.
+func runBuild(args []string) int {
+	outDir := "build"
+	var paths []string
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "-o", "--out":
+			if i+1 >= len(args) {
+				fmt.Fprintf(os.Stderr, "sprout: build: %s needs a directory\n", args[i])
+				return 2
+			}
+			i++
+			outDir = args[i]
+		default:
+			if strings.HasPrefix(args[i], "-") {
+				fmt.Fprintf(os.Stderr, "sprout: build: unknown option %s\n", args[i])
+				return 2
+			}
+			paths = append(paths, args[i])
+		}
+	}
+	if len(paths) != 1 {
+		fmt.Fprintf(os.Stderr, "sprout: build expects one file\n")
+		return 2
+	}
+
+	files, err := module.Graph(paths[0])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "sprout: build: %v\n", err)
+		return 1
+	}
+	mainAbs, err := filepath.Abs(paths[0])
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "sprout: build: cannot resolve %s\n", paths[0])
+		return 1
+	}
+	mainDir := filepath.Dir(mainAbs)
+
+	for _, src := range files {
+		rel, err := filepath.Rel(mainDir, src)
+		if err != nil || strings.HasPrefix(rel, "..") {
+			fmt.Fprintf(os.Stderr, "sprout: build: module '%s' is outside the project directory\n", src)
+			return 1
+		}
+		dest := filepath.Join(outDir, rel)
+		if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+			fmt.Fprintf(os.Stderr, "sprout: build: cannot create %s: %v\n", filepath.Dir(dest), err)
+			return 1
+		}
+		data, err := os.ReadFile(src)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "sprout: build: cannot read %s: %v\n", src, err)
+			return 1
+		}
+		if err := os.WriteFile(dest, data, 0o644); err != nil {
+			fmt.Fprintf(os.Stderr, "sprout: build: cannot write %s: %v\n", dest, err)
+			return 1
+		}
+	}
+
+	fmt.Printf("wrote %d file(s) to %s\n", len(files), outDir)
 	return 0
 }
 

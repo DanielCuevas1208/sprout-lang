@@ -140,6 +140,19 @@ func TestFunctionString(t *testing.T) {
 	}
 }
 
+func TestDisassembleImport(t *testing.T) {
+	b := NewBuilder("main", "test.spr", nil)
+	idx := b.Const(object.Str{Value: "lib/a.spr"})
+	b.AddU16(OpImport, idx, pos())
+	b.Add(OpReturn, pos())
+	out := Disassemble(b.Finish())
+	for _, want := range []string{"IMPORT", "0", "lib/a.spr"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("disassembly missing %q:\n%s", want, out)
+		}
+	}
+}
+
 func TestU16(t *testing.T) {
 	b := []byte{0xAB, 0xCD}
 	if got := U16(b, 0); got != 0xABCD {

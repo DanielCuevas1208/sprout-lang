@@ -20,6 +20,17 @@ The VM executes those instructions.
 The `sprout vm` command runs the whole pipeline.
 The `sprout dis` command shows the compiled instructions.
 
+## Modules
+
+Sprout 0.3 compiles an import expression to an `IMPORT` instruction.
+The instruction holds an index into the constant pool.
+The pool value is the module path string.
+
+At runtime the VM calls the module loader installed on its context.
+The loader resolves the path against the current source file.
+It runs the module with its own VM instance and returns a namespace value.
+Member access compiles to a push of the member name and a `GET_INDEX`.
+
 ## Bytecode format
 
 A compiled function is a stream of bytes.
@@ -89,6 +100,7 @@ This matches the interpreter, so closures see their own copy.
 | SET_UP | depth, slot | Store in an enclosing slot. |
 | BUILTIN | index | Push a standard function. |
 | CLOSURE | index | Capture the current environment. |
+| IMPORT | index | Load a module by its path. |
 | CALL | count | Call the top value. |
 | RETURN | none | Return nil. |
 | RETURN_VALUE | none | Return the top. |

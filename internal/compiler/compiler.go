@@ -87,7 +87,14 @@ func Compile(file *source.File, prog *ast.Program) (p *code.Program, err error) 
 	c.compileStmts(prog.Stmts)
 	c.b().Add(code.OpReturn, endPos(prog.Stmts))
 	main := c.finishFn()
-	return &code.Program{Main: main}, nil
+
+	// Record the root scope so the VM can snapshot a module's exports.
+	// The root scope holds every top-level declaration with its slot.
+	exports := make(map[string]int, len(c.fns[0].cur.names))
+	for name, sym := range c.fns[0].cur.names {
+		exports[name] = sym.slot
+	}
+	return &code.Program{Main: main, Exports: exports}, nil
 }
 
 // compileError is the panic signal for internal compiler failures.
@@ -457,6 +464,16 @@ func (c *Compiler) compileExpr(e ast.Expr) {
 	case *ast.FnExpr:
 		idx := c.enterFn("", n.Params, n.Body)
 		c.b().AddU16(code.OpClosure, idx, n.FnPos)
+
+	case *ast.ImportExpr:
+		idx := c.b().Const(object.Str{Value: n.Path})
+		c.b().AddU16(code.OpImport, idx, n.Position)
+
+	case *ast.MemberExpr:
+		c.compileExpr(n.Object)
+		idx := c.b().Const(object.Str{Value: n.Name.Name})
+		c.b().AddU16(code.OpPushConst, idx, n.Pos())
+		c.b().Add(code.OpGetIndex, n.Dot)
 
 	default:
 		c.failf(e.Pos(), "internal error: unsupported expression")

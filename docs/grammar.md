@@ -1,6 +1,6 @@
 # Sprout Grammar
 
-This document is the formal grammar of Sprout version 0.2.
+This document is the formal grammar of Sprout version 0.3.
 
 ## Notation
 
@@ -91,10 +91,10 @@ factor        := unary {("*" | "/" | "%") unary}
 unary         := ("-" | "not") unary | power
 power         := primary ["^" unary]
 primary       := integer | float | string | "true" | "false" | "nil"
-               | identifier | fn_expr
+               | identifier | fn_expr | import_expr
                | "(" expr ")"
                | list_lit | map_lit
-               | call | index
+               | call | index | member
 ```
 
 The unary minus binds looser than power. So `-3 ^ 2` means `-(3 ^ 2)`.
@@ -105,7 +105,14 @@ map_lit       := "{" [ map_entry {"," map_entry} [","] ] "}"
 map_entry     := expr ":" expr
 call          := primary "(" [ expr {"," expr} [","] ] ")"
 index         := primary "[" expr "]"
+member        := primary "." identifier
+import_expr   := "import" string
 ```
+
+The `import` expression loads a module at runtime.
+Its path is a string literal.
+The dot operator reads a named member.
+Both bind as tight as a call or index.
 
 ## Precedence table
 
@@ -120,7 +127,7 @@ index         := primary "[" expr "]"
 | 7     | `*` `/` `%` | left        |
 | 8     | `-` `not` (prefix) | right |
 | 9     | `^`       | right         |
-| 10    | call, index | left       |
+| 10    | call, index, member access | left |
 
 ## Line continuation
 

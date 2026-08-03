@@ -1,6 +1,6 @@
 # Standard Library
 
-This page lists the built-in functions of Sprout 0.2.
+This page lists the built-in functions of Sprout 0.3.
 They are available in every program without an import.
 
 ## Output
@@ -91,3 +91,11 @@ Map keys are strings. Maps keep insertion order.
 | `assert(cond, msg?)` | Stops on a false condition. |
 
 An assertion error names the file and line of the call.
+
+## Modules
+
+A module is a value type.
+The `type` function returns "module" for one.
+Read members with dot access or brackets.
+Modules are read-only.
+See `docs/modules.md` for the module reference.

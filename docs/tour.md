@@ -204,6 +204,50 @@ print(filter(nums, fn(x) { return x % 2 == 0 }))
 print(fold(nums, 0, fn(acc, x) { return acc + x }))
 ```
 
+## Modules
+
+Sprout 0.3 adds a module system.
+An `import` expression loads a source file.
+The file's top-level names become its exports.
+
+Save this file as `lib/math.spr`.
+
+```sprout
+let answer = 42
+
+fn double(x) {
+    return x * 2
+}
+```
+
+Import it from another program.
+
+```sprout
+let math = import "lib/math.spr"
+print(math.answer)
+print(math.double(21))
+```
+
+The dot operator reads an export.
+Brackets read the same export.
+Modules run once, so the load is cheap on a second import.
+Modules are read-only. Assignment to a member fails.
+
+```sprout
+let math = import "lib/math.spr"
+print(math["answer"])   // 42
+math.answer = 1         // error: modules are read-only
+```
+
+The `sprout build` command copies a program and its modules.
+
+```text
+sprout build examples/imports.spr -o app
+sprout run app/imports.spr
+```
+
+Read `docs/modules.md` for the full module reference.
+
 ## Assertions
 
 The `assert` function checks a condition. It stops the program when the

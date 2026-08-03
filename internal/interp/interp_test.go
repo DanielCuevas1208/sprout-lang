@@ -365,3 +365,22 @@ print({"k": [1, 2]})
 print(range(0, 3))
 `, "[1, a, true, nil, 2.5]\n{k: [1, 2]}\nrange(0, 3)\n")
 }
+
+func TestMemberAccess(t *testing.T) {
+	expectOutput(t, `
+let m = {"name": "sprout", "version": 3}
+print(m.name)
+print(m.version)
+print(m["name"])
+`, "sprout\n3\nsprout\n")
+
+	expectOutput(t, `
+let ops = {"double": fn(x) { return x * 2 }}
+print(ops.double(21))
+`, "42\n")
+
+	expectOutput(t, `
+let m = {"a": 1}
+print(m.missing)
+`, "nil\n")
+}

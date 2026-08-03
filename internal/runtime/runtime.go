@@ -34,6 +34,18 @@ type Context struct {
 	// Call invokes fn with args. Engines use it to call user functions.
 	// The hook reports an error by panicking with the engine's signal.
 	Call func(fn object.Object, args []object.Object, pos source.Pos) object.Object
+
+	// Modules loads an imported module and returns its namespace value.
+	// Engines call this hook when they evaluate an import expression.
+	Modules ModuleLoader
+}
+
+// ModuleLoader loads a module on behalf of an engine.
+//
+// The loader resolves path against the importing file and runs the module
+// with the same engine kind. A nil loader means imports are unavailable.
+type ModuleLoader interface {
+	LoadModule(from *source.File, path string) (*object.Module, error)
 }
 
 // Builtin is one standard library function.
@@ -443,6 +455,15 @@ func IndexGet(container, idx object.Object) (object.Object, error) {
 			return v, nil
 		}
 		return object.NilValue, nil
+	case *object.Module:
+		ks, ok := idx.(object.Str)
+		if !ok {
+			return nil, FmtErr("module member must be a string")
+		}
+		if v, exists := c.Exports[ks.Value]; exists {
+			return v, nil
+		}
+		return nil, FmtErr("module '%s' has no exported member '%s'", c.BaseName(), ks.Value)
 	}
 	return nil, FmtErr("cannot index a %s", container.Type())
 }
@@ -467,6 +488,8 @@ func SetIndex(container, idx, value object.Object) (object.Object, error) {
 		}
 		c.Set(ks.Value, value)
 		return value, nil
+	case *object.Module:
+		return nil, FmtErr("cannot assign to a member of a module")
 	}
 	return nil, FmtErr("cannot assign to an index of a %s", container.Type())
 }

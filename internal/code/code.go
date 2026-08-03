@@ -36,6 +36,7 @@ const (
 	OpSetUp       // uint16 depth, uint16 slot: store into an enclosing env
 	OpBuiltin     // uint16 index into the standard library
 	OpClosure     // uint16 index into Consts: capture the current env
+	OpImport      // uint16 index into Consts: load a module by its path
 	OpCall        // byte count: call the top value with count arguments
 	OpReturn      // return nil
 	OpReturnValue // return the top of the stack
@@ -80,6 +81,7 @@ var opNames = map[Opcode]string{
 	OpSetUp:       "SET_UP",
 	OpBuiltin:     "BUILTIN",
 	OpClosure:     "CLOSURE",
+	OpImport:      "IMPORT",
 	OpCall:        "CALL",
 	OpReturn:      "RETURN",
 	OpReturnValue: "RETURN_VALUE",
@@ -148,6 +150,9 @@ func (f *Function) String() string {
 // Program is a compiled Sprout program. Main is the entry function.
 type Program struct {
 	Main *Function
+	// Exports maps a top-level name to its slot in Main's environment.
+	// The VM uses it to snapshot a module's public bindings.
+	Exports map[string]int
 }
 
 // Builder assembles one function's bytecode.
@@ -289,6 +294,10 @@ func (d *disassembler) instruction(ip int) (int, bool) {
 		} else {
 			fmt.Fprintf(&d.b, "  %d", idx)
 		}
+		return ip + 3, true
+	case OpImport:
+		idx := U16(d.fn.Code, ip+1)
+		fmt.Fprintf(&d.b, "  %d  (%s)", idx, d.fn.Consts[idx])
 		return ip + 3, true
 	case OpCall:
 		fmt.Fprintf(&d.b, "  %d", d.fn.Code[ip+1])

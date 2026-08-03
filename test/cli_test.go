@@ -57,7 +57,7 @@ func TestVersion(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("version exit code %d", code)
 	}
-	if !strings.Contains(out, "0.2.0") {
+	if !strings.Contains(out, "0.3.0") {
 		t.Errorf("version output: %q", out)
 	}
 }
@@ -232,6 +232,111 @@ func TestUnknownCommand(t *testing.T) {
 		t.Fatalf("unknown command should fail")
 	}
 	if !strings.Contains(errOut, "unknown command") {
+		t.Errorf("stderr: %q", errOut)
+	}
+}
+
+func TestRunImports(t *testing.T) {
+	out, _, code := runCLI(t, "", "run", filepath.Join("..", "examples", "imports.spr"))
+	if code != 0 {
+		t.Fatalf("run imports exit code %d", code)
+	}
+	for _, want := range []string{"sum to 10: 55", "fib 8: 21", "HELLO!", "type: module"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("output missing %q: %q", want, out)
+		}
+	}
+}
+
+func TestRunVMImports(t *testing.T) {
+	out, _, code := runCLI(t, "", "vm", filepath.Join("..", "examples", "imports.spr"))
+	if code != 0 {
+		t.Fatalf("vm imports exit code %d", code)
+	}
+	if !strings.Contains(out, "sum to 10: 55") || !strings.Contains(out, "SPROUT!") {
+		t.Errorf("output: %q", out)
+	}
+}
+
+func TestRunImportMissingModule(t *testing.T) {
+	src := "let m = import \"lib/ghost.spr\"\n"
+	dir := t.TempDir()
+	path := filepath.Join(dir, "ghost_main.spr")
+	if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, errOut, code := runCLI(t, "", "run", path)
+	if code == 0 {
+		t.Fatalf("run should fail")
+	}
+	if !strings.Contains(errOut, "cannot read module") {
+		t.Errorf("stderr: %q", errOut)
+	}
+}
+
+func TestBuildCopiesModuleGraph(t *testing.T) {
+	dir := t.TempDir()
+	files := map[string]string{
+		"app.spr": `let math = import "lib/math.spr"
+print(math.double(21))`,
+		"lib/math.spr": `fn double(x) {
+	return x * 2
+}`,
+	}
+	for name, src := range files {
+		path := filepath.Join(dir, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	out, _, code := runCLI(t, "", "build", filepath.Join(dir, "app.spr"), "-o", filepath.Join(dir, "dist"))
+	if code != 0 {
+		t.Fatalf("build exit code %d, output: %q", code, out)
+	}
+	if !strings.Contains(out, "wrote 2 file(s)") {
+		t.Errorf("build output: %q", out)
+	}
+	for _, rel := range []string{"app.spr", filepath.Join("lib", "math.spr")} {
+		if _, err := os.Stat(filepath.Join(dir, "dist", rel)); err != nil {
+			t.Errorf("built tree missing %s: %v", rel, err)
+		}
+	}
+
+	// The built program runs with its imports resolved relative to itself.
+	out, _, code = runCLI(t, "", "run", filepath.Join(dir, "dist", "app.spr"))
+	if code != 0 {
+		t.Fatalf("run built program exit code %d", code)
+	}
+	if !strings.Contains(out, "42") {
+		t.Errorf("built program output: %q", out)
+	}
+}
+
+func TestBuildRejectsCircularImports(t *testing.T) {
+	dir := t.TempDir()
+	files := map[string]string{
+		"app.spr":   `let a = import "lib/a.spr"`,
+		"lib/a.spr": `let b = import "b.spr"`,
+		"lib/b.spr": `let a = import "a.spr"`,
+	}
+	for name, src := range files {
+		path := filepath.Join(dir, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, errOut, code := runCLI(t, "", "build", filepath.Join(dir, "app.spr"))
+	if code == 0 {
+		t.Fatalf("build should fail on a circular import")
+	}
+	if !strings.Contains(errOut, "circular import") {
 		t.Errorf("stderr: %q", errOut)
 	}
 }

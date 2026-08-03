@@ -300,3 +300,17 @@ add_entry("two")
 print(log)
 `, "[one, two]\n")
 }
+
+func TestVMMemberAccess(t *testing.T) {
+	expectOutput(t, `
+let m = {"name": "sprout", "version": 3}
+print(m.name)
+print(m.version)
+print(m["name"])
+`, "sprout\n3\nsprout\n")
+
+	expectOutput(t, `
+let ops = {"double": fn(x) { return x * 2 }}
+print(ops.double(21))
+`, "42\n")
+}

@@ -2,7 +2,7 @@
 
 Sprout is a small programming language that runs on Go.
 It ships with a lexer, a Pratt parser, and two execution engines.
-Version 0.2 adds a stack-based bytecode virtual machine.
+Version 0.3 adds a module system and a build tool.
 The interpreter and the VM share one runtime and one standard library.
 Sprout produces friendly diagnostics that point at the exact problem.
 
@@ -15,6 +15,8 @@ The codebase is structured to grow cleanly over time.
 - A documented grammar with a line-aware Pratt parser.
 - A bytecode compiler and a stack-based virtual machine.
 - A tree-walking interpreter that shares the runtime with the VM.
+- A module system with caching and circular import detection.
+- A build tool that copies a program and its module tree.
 - A disassembler for the compiled instruction stream.
 - Source diagnostics with a gutter, line, and caret.
 - A small standard library for real example programs.
@@ -83,11 +85,13 @@ Run the tour in `docs/tour.md` for a full walkthrough.
 | `sprout lex file.spr` | Shows the tokens. |
 | `sprout parse file.spr` | Shows the syntax tree. |
 | `sprout check file.spr` | Checks without running. |
+| `sprout build file.spr` | Copies a program and its modules into `build/`. |
 | `sprout version` | Shows the version. |
 
 Pass a file path with no command to run it.
 Run `sprout help` to see the full usage.
 Add `-color always` to force colored diagnostics.
+Add `-o dir` to build to a custom folder.
 
 ## Diagnostics
 
@@ -142,6 +146,35 @@ Only `nil` and `false` are falsy.
 An expression ends at a newline unless it is inside brackets.
 See `docs/grammar.md` for the formal grammar.
 
+## Modules
+
+An `import` expression loads a Sprout file and returns its namespace.
+Every top-level `let`, `const`, and `fn` becomes an export.
+The dot operator reads an export. Use it only for reading.
+
+```sprout
+let math = import "lib/math.spr"
+
+print(math.double(21))   // 42
+print(math.answer)       // 42
+```
+
+A module runs once.
+The loader caches each module by its resolved path.
+A circular import stops with a clear error.
+Modules are read-only.
+
+The `sprout build` command copies a program into a folder.
+It copies every module the program imports too.
+The output tree matches the source tree.
+
+```text
+sprout build examples/imports.spr -o app
+sprout run app/imports.spr
+```
+
+See `docs/modules.md` for the full reference.
+
 ## Bytecode virtual machine
 
 Version 0.2 adds a compiler and a stack-based virtual machine.
@@ -166,6 +199,7 @@ Slots:  1
 ```
 
 Each line shows the offset, the opcode, and the source position.
+An import appears as an `IMPORT` instruction.
 The engine parity tests prove the VM matches the interpreter.
 See `docs/bytecode.md` for the full reference.
 
@@ -196,6 +230,7 @@ The `examples` directory holds documented programs.
 - `strings.spr` shows string functions.
 - `math.spr` shows numbers and rounding.
 - `higher_order.spr` uses map, filter, and fold.
+- `imports.spr` loads modules from the `lib` folder.
 - `guess.spr` is an interactive game.
 
 Each example has a golden output in `test/golden`.
@@ -214,6 +249,7 @@ internal/ast     the syntax tree
 internal/parser  the Pratt parser
 internal/checker static analysis
 internal/runtime value semantics and the standard library
+internal/module  module loading and the build graph
 internal/interp  the tree-walking interpreter
 internal/code    opcodes and the instruction stream
 internal/compiler  bytecode compiler
@@ -225,6 +261,7 @@ internal/repl    the interactive session
 Each stage is independent.
 The parser feeds the checker and the compiler.
 The runtime is the single source of truth for both engines.
+The module loader runs each engine kind with the same rules.
 Adding a feature means updating the runtime, then both engines stay in step.
 
 ## Development
@@ -268,6 +305,7 @@ All tests pass on Go 1.22 and newer.
 | `internal/compiler` | Bytecode for expressions and control flow. |
 | `internal/vm` | Execution, closures, and runtime errors. |
 | `internal/diag` | Diagnostic rendering. |
+| `internal/module` | Imports, caching, and the build graph. |
 | `test` | Example goldens, engine parity, and command line. |
 
 The parity tests run each program on both engines.
@@ -279,7 +317,9 @@ Tests use only the standard library. They need no network or secrets.
 Version 0.2 is complete. It adds the bytecode virtual machine.
 It keeps the same parser and checker.
 
-Version 0.3 adds a module system and a build tool.
+Version 0.3 is complete. It adds the module system and the build tool.
+Modules load once, export their top-level names, and stay read-only.
+
 Version 0.4 adds structs, methods, and interfaces.
 Version 0.5 adds result types and pattern matching.
 Version 0.6 adds concurrency with channels.
@@ -294,6 +334,8 @@ Version 0.6 adds concurrency with channels.
 - The standard library is small by design.
 - The VM materializes a loop iterable before the loop starts.
 - `break` and `continue` inside a closure are not supported.
+- A module must be a local file. There is no package registry.
+- Imports resolve at runtime, not at check time.
 
 ## License
 

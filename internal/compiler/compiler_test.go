@@ -6,6 +6,7 @@ import (
 
 	"github.com/sprout-lang/sprout/internal/code"
 	"github.com/sprout-lang/sprout/internal/diag"
+	"github.com/sprout-lang/sprout/internal/object"
 	"github.com/sprout-lang/sprout/internal/parser"
 	"github.com/sprout-lang/sprout/internal/source"
 )
@@ -46,8 +47,9 @@ func nextOffset(b []byte, ip int) int {
 	case code.OpCall:
 		return ip + 2
 	case code.OpPushConst, code.OpNewEnv, code.OpGetLocal, code.OpSetLocal,
-		code.OpBuiltin, code.OpClosure, code.OpJump, code.OpJumpIfFalse,
-		code.OpJumpIfTrue, code.OpBuildList, code.OpBuildMap, code.OpIterNext:
+		code.OpBuiltin, code.OpClosure, code.OpImport, code.OpJump,
+		code.OpJumpIfFalse, code.OpJumpIfTrue, code.OpBuildList,
+		code.OpBuildMap, code.OpIterNext:
 		return ip + 3
 	default:
 		return ip + 1
@@ -330,5 +332,47 @@ func TestCompileASTPositionsTracked(t *testing.T) {
 			t.Errorf("missing position for instruction at offset %d", ip)
 		}
 		ip = nextOffset(main.Code, ip)
+	}
+}
+
+func TestCompileImport(t *testing.T) {
+	p, err := compileSrc(t, `let m = import "lib/a.spr"
+print(m.x)
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	main := p.Main
+	if got := opCount(t, main, code.OpImport); got != 1 {
+		t.Errorf("import count: %d", got)
+	}
+	// Member access reads the member name, then indexes the module.
+	if got := opCount(t, main, code.OpGetIndex); got != 1 {
+		t.Errorf("get index count: %d", got)
+	}
+	found := false
+	for _, c := range main.Consts {
+		if s, ok := c.(object.Str); ok && s.Value == "lib/a.spr" {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("module path constant missing from pool: %v", main.Consts)
+	}
+}
+
+func TestCompileRecordsExports(t *testing.T) {
+	p, err := compileSrc(t, "let a = 1\nfn f() { }\nconst b = 2\n")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]bool{"a": true, "f": true, "b": true}
+	for name := range want {
+		if _, ok := p.Exports[name]; !ok {
+			t.Errorf("export %q missing: %v", name, p.Exports)
+		}
+	}
+	if len(p.Exports) != len(want) {
+		t.Errorf("export count: %d, want %d: %v", len(p.Exports), len(want), p.Exports)
 	}
 }

@@ -4,6 +4,7 @@
 *.exe
 *.test
 *.out
+/build/
 
 # Editor and OS files
 .vscode/

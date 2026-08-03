@@ -94,6 +94,11 @@ func TestExpressions(t *testing.T) {
 		{"f(a)(b)", "(program (call (call f a) b))"},
 		{"l[0]", "(program (index l (int 0)))"},
 		{"l[i] = v", "(program (assign (index l i) v))"},
+		{`import "lib/a.spr"`, `(program (import "lib/a.spr"))`},
+		{"m.x", "(program (member m x))"},
+		{"m.f(1)", "(program (call (member m f) (int 1)))"},
+		{"m.a.b", "(program (member (member m a) b))"},
+		{"let m = import \"lib/a.spr\"", `(program (let m value (import "lib/a.spr")))`},
 		{"[1, 2, 3]", "(program (list (int 1) (int 2) (int 3)))"},
 		{`{"a": 1}`, `(program (map (entry (string "a") (int 1))))`},
 		{`"hi"`, `(program (string "hi"))`},
@@ -181,6 +186,11 @@ func TestParseErrors(t *testing.T) {
 		{"}", "unexpected '}'"},
 		{"for i range(0, 3) { }", "expected 'in'"},
 		{"let x = 1 )", "expected a statement"},
+		{"import", "expected a module path"},
+		{"import 42", "expected a module path"},
+		{"m.", "expected a member name after '.'"},
+		{"m. = 1", "expected a member name after '.'"},
+		{"m.x = 1", "cannot assign to a module member"},
 	}
 	for _, c := range cases {
 		expectErrors(t, c.src, c.want)

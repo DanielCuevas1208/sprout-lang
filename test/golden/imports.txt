@@ -1,0 +1,6 @@
+sum to 10: 55
+fib 8: 21
+ratio: 1.618
+HELLO!
+SPROUT!
+type: module

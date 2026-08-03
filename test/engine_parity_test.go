@@ -2,12 +2,15 @@ package test
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/sprout-lang/sprout/internal/checker"
 	"github.com/sprout-lang/sprout/internal/compiler"
 	"github.com/sprout-lang/sprout/internal/interp"
+	"github.com/sprout-lang/sprout/internal/module"
 	"github.com/sprout-lang/sprout/internal/parser"
 	"github.com/sprout-lang/sprout/internal/source"
 	"github.com/sprout-lang/sprout/internal/vm"
@@ -187,4 +190,84 @@ func TestEnginesAgreeOnErrors(t *testing.T) {
 			t.Errorf("error messages differ for:\n%s\ninterp: %q\n    vm: %q", src, ivErr.Error(), vmErr.Error())
 		}
 	}
+}
+
+// TestEnginesAgreeOnModules runs a program that imports modules on both
+// engines. The loader contract must hold for the interpreter and the VM.
+func TestEnginesAgreeOnModules(t *testing.T) {
+	dir := t.TempDir()
+	files := map[string]string{
+		"main.spr": `let math = import "lib/math.spr"
+let text = import "lib/text.spr"
+print(math.fib(8))
+print(math.answer)
+print(text.shout("hey"))
+print(math.answer == math["answer"])`,
+		"lib/math.spr": `let answer = 42
+fn fib(n) {
+	if n < 2 {
+		return n
+	}
+	return fib(n - 1) + fib(n - 2)
+}`,
+		"lib/text.spr": `fn shout(s) {
+	return upper(s) + "!"
+}`,
+	}
+	for name, src := range files {
+		path := filepath.Join(dir, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	mainPath := filepath.Join(dir, "main.spr")
+	ivOut, ivErr := runInterpFile(mainPath)
+	vmOut, vmErr := runVMFile(mainPath)
+	if ivErr != nil {
+		t.Fatalf("interpreter error: %v", ivErr)
+	}
+	if vmErr != nil {
+		t.Fatalf("vm error: %v", vmErr)
+	}
+	if ivOut != vmOut {
+		t.Errorf("engines differ on modules:\ninterp: %q\n    vm: %q", ivOut, vmOut)
+	}
+}
+
+// runInterpFile runs a source file on the interpreter with a module loader.
+func runInterpFile(path string) (string, *interp.RunError) {
+	text, err := os.ReadFile(path)
+	if err != nil {
+		return "", &interp.RunError{Message: err.Error()}
+	}
+	file := source.NewFile(path, string(text))
+	prog, _ := parser.Parse(file)
+	var stdout, stderr strings.Builder
+	iv := interp.NewWithIO(strings.NewReader(""), &stdout, &stderr)
+	iv.SetModuleLoader(module.NewInterpLoader(strings.NewReader(""), &stdout, &stderr))
+	_, rerr := iv.Exec(file, prog)
+	return stdout.String(), rerr
+}
+
+// runVMFile runs a source file on the bytecode VM with a module loader.
+func runVMFile(path string) (string, *vm.RunError) {
+	text, err := os.ReadFile(path)
+	if err != nil {
+		return "", &vm.RunError{Message: err.Error()}
+	}
+	file := source.NewFile(path, string(text))
+	prog, _ := parser.Parse(file)
+	compiled, err := compiler.Compile(file, prog)
+	if err != nil {
+		return "", &vm.RunError{Message: err.Error()}
+	}
+	var stdout, stderr strings.Builder
+	machine := vm.NewWithIO(strings.NewReader(""), &stdout, &stderr)
+	machine.SetModuleLoader(module.NewVMLoader(strings.NewReader(""), &stdout, &stderr))
+	_, rerr := machine.Run(file, compiled)
+	return stdout.String(), rerr
 }

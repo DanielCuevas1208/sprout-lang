@@ -1,0 +1,17 @@
+// imports.spr - the module system in action.
+//
+// Run: sprout run examples/imports.spr
+// The library modules live in the lib folder.
+//
+// An import expression loads a module and returns its namespace value.
+// Dot access and bracket access read the exports the same way.
+
+let math = import "lib/sequences.spr"
+let text = import "lib/strings.spr"
+
+print("sum to 10:", math.sum_to(10))
+print("fib 8:", math.fibonacci(8))
+print("ratio:", math.golden_ratio)
+print(text["shout"]("hello"))
+print(text.shout("sprout"))
+print("type:", type(math))

@@ -50,6 +50,7 @@ var precedences = map[token.Kind]int{
 	token.CARET:    precPower,
 	token.LPAREN:   precCall,
 	token.LBRACKET: precCall,
+	token.DOT:      precCall,
 }
 
 // Parser turns tokens into an AST.
@@ -326,6 +327,11 @@ func (p *Parser) parseExpression(prec int) ast.Expr {
 			if left == nil {
 				return nil
 			}
+		case token.DOT:
+			left = p.parseMember(left)
+			if left == nil {
+				return nil
+			}
 		default:
 			op := p.next()
 			p.skipNewlines()
@@ -410,6 +416,8 @@ func (p *Parser) parsePrefix(t token.Token) ast.Expr {
 		return p.parseMap()
 	case token.FN:
 		return p.parseFnExpr()
+	case token.IMPORT:
+		return p.parseImportExpr()
 	default:
 		p.errorf(t.Pos, "expected an expression, found %s", tokenString(t))
 		p.next()
@@ -609,6 +617,34 @@ func (p *Parser) parseFnExpr() ast.Expr {
 	return &ast.FnExpr{FnPos: fnTok.Pos, Params: params, Body: body}
 }
 
+// parseImportExpr parses 'import "path"'.
+//
+// The expression loads a module at runtime and evaluates to its namespace
+// value. The path is a string literal resolved against the importing file.
+func (p *Parser) parseImportExpr() ast.Expr {
+	importTok := p.next() // import
+	if !p.at(token.STRING) {
+		p.errorf(p.cur().Pos, "expected a module path after 'import', found %s", tokenString(p.cur()))
+		p.recoverStatement()
+		return nil
+	}
+	t := p.next()
+	return &ast.ImportExpr{Path: t.Value, Position: importTok.Pos}
+}
+
+// parseMember parses a dot access of a member name.
+//
+// The dot binds as tight as a call or index. A module member is read-only,
+// so this node is never a valid assignment target.
+func (p *Parser) parseMember(x ast.Expr) ast.Expr {
+	dot := p.next() // .
+	name := p.expectIdent("a member name after '.'")
+	if name == nil {
+		return nil
+	}
+	return &ast.MemberExpr{Object: x, Dot: dot.Pos, Name: name}
+}
+
 func (p *Parser) parseParams(openPos source.Pos) ([]*ast.Param, bool) {
 	var params []*ast.Param
 	if !p.at(token.LPAREN) {
@@ -764,6 +800,8 @@ func assignTargetDesc(e ast.Expr) string {
 		return "a name"
 	case *ast.IndexExpr:
 		return "an index"
+	case *ast.MemberExpr:
+		return "a module member"
 	case *ast.CallExpr:
 		return "a call result"
 	}

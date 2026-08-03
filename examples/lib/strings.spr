@@ -1,0 +1,13 @@
+// strings.spr - text helpers shared by the examples.
+//
+// Run: none. Another program imports this module.
+//
+// Every top-level declaration becomes an export.
+
+fn shout(text) {
+    return upper(text) + "!"
+}
+
+fn join_words(words) {
+    return join(" ", words)
+}

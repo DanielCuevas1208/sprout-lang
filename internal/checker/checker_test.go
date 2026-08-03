@@ -58,6 +58,12 @@ func TestCleanPrograms(t *testing.T) {
 		"let f = fn() { return 1 }\nprint(f())",
 		"let x: int = 5\nlet y: float = 5\nlet z: string = \"hi\"",
 		"let x = 1\nif x { print(1) } else { print(2) }",
+		`let m = import "lib/a.spr"
+print(m.answer)`,
+		`let m: module = import "lib/a.spr"`,
+		`let m = import "lib/a.spr"
+let f = fn() { return m.double(2) }
+print(f())`,
 	}
 	for _, src := range cases {
 		expectClean(t, src)
@@ -85,6 +91,10 @@ func TestCheckerErrors(t *testing.T) {
 		{"x = 5", "undefined name 'x'"},
 		{"let x = undefined_func()", "undefined name 'undefined_func'"},
 		{"1 = 2", "cannot assign to this expression"},
+		{`let m = import "lib/a.spr"
+m["x"] = 1`, "cannot assign to a member of a module"},
+		{`let m = import "lib/a.spr"
+set(m, "x", 1)`, "no error"},
 	}
 	for _, c := range cases {
 		if c.want == "no error" {
