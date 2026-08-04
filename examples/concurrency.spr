@@ -1,0 +1,17 @@
+// Channels coordinate two workers without shared mutable state.
+let jobs = channel()
+let left = spawn(fn() {
+    send(jobs, 20)
+    return "left"
+})
+let right = spawn(fn() {
+    send(jobs, 22)
+    return "right"
+})
+
+let first = unwrap(recv(jobs))
+let second = unwrap(recv(jobs))
+print("sum: " + str(first + second))
+print("workers: " + unwrap(await(left)) + ", " + unwrap(await(right)))
+close(jobs)
+print("closed: " + str(is_err(recv(jobs))))

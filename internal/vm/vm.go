@@ -15,6 +15,7 @@ import (
 	"io"
 	"os"
 	"strings"
+	"sync"
 
 	"github.com/sprout-lang/sprout/internal/code"
 	"github.com/sprout-lang/sprout/internal/diag"
@@ -44,6 +45,7 @@ func (c *Closure) String() string {
 // Env is a lexical environment. It mirrors one compiler scope.
 type Env struct {
 	parent *Env
+	mu     sync.RWMutex
 	slots  []object.Object
 }
 
@@ -121,6 +123,7 @@ func NewWithIO(stdin io.Reader, stdout, stderr io.Writer) *VM {
 		Call: func(fn object.Object, args []object.Object, pos source.Pos) object.Object {
 			return vm.callValue(fn, args, pos)
 		},
+		Spawn: vm.spawn,
 	}
 	return vm
 }
@@ -237,7 +240,7 @@ func (vm *VM) callValue(callee object.Object, args []object.Object, pos source.P
 		}
 		env := &Env{parent: c.env, slots: make([]object.Object, c.fn.NumSlots)}
 		for i, a := range args {
-			env.slots[i] = a
+			env.set(i, a)
 		}
 		before := len(vm.frames)
 		vm.frames = append(vm.frames, &frame{
@@ -260,9 +263,9 @@ func (vm *VM) callValue(callee object.Object, args []object.Object, pos source.P
 				c.Name, len(cl.fn.ParamNames)-1, len(args)), pos)
 		}
 		env := &Env{parent: cl.env, slots: make([]object.Object, cl.fn.NumSlots)}
-		env.slots[0] = c.Receiver
+		env.set(0, c.Receiver)
 		for i, a := range args {
-			env.slots[i+1] = a
+			env.set(i+1, a)
 		}
 		before := len(vm.frames)
 		vm.frames = append(vm.frames, &frame{
@@ -338,21 +341,21 @@ func (vm *VM) runFrames(until int) object.Object {
 			fr.ip++
 		case code.OpGetLocal:
 			slot := int(code.U16(fn.Code, fr.ip+1))
-			vm.push(fr.env.slots[slot])
+			vm.push(fr.env.get(slot))
 			fr.ip += 3
 		case code.OpSetLocal:
 			slot := int(code.U16(fn.Code, fr.ip+1))
-			fr.env.slots[slot] = vm.pop()
+			fr.env.set(slot, vm.pop())
 			fr.ip += 3
 		case code.OpGetUp:
 			depth := int(code.U16(fn.Code, fr.ip+1))
 			slot := int(code.U16(fn.Code, fr.ip+3))
-			vm.push(vm.envAt(fr, depth).slots[slot])
+			vm.push(vm.envAt(fr, depth).get(slot))
 			fr.ip += 5
 		case code.OpSetUp:
 			depth := int(code.U16(fn.Code, fr.ip+1))
 			slot := int(code.U16(fn.Code, fr.ip+3))
-			vm.envAt(fr, depth).slots[slot] = vm.pop()
+			vm.envAt(fr, depth).set(slot, vm.pop())
 			fr.ip += 5
 		case code.OpBuiltin:
 			vm.push(runtime.Builtins[code.U16(fn.Code, fr.ip+1)])
@@ -638,4 +641,16 @@ func compareResult(cmp int, op code.Opcode) bool {
 		return cmp >= 0
 	}
 	return false
+}
+
+func (e *Env) get(slot int) object.Object {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.slots[slot]
+}
+
+func (e *Env) set(slot int, value object.Object) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.slots[slot] = value
 }

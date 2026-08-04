@@ -1,6 +1,6 @@
 # Sprout Grammar
 
-This document is the formal grammar of Sprout version 0.5.
+This document is the formal grammar of Sprout version 0.6.
 
 ## Notation
 
@@ -163,6 +163,7 @@ member        := primary "." identifier
 A member access reads a field, a method, or an exported module name.
 
 A match evaluates its subject once.
+Concurrency uses standard library calls. It adds no grammar productions.
 Arms run in order; the first match wins.
 A pattern binds at most one name.
 The last arm must be a catch-all, written `_` or a plain name.

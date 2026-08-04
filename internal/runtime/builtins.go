@@ -583,3 +583,79 @@ func builtinUnwrap(ctx *Context, args []object.Object, pos source.Pos) (object.O
 func builtinUnwrapOr(ctx *Context, args []object.Object, pos source.Pos) (object.Object, error) {
 	return UnwrapOr(args[0], args[1])
 }
+
+// builtinChannel creates a blocking channel or a buffered channel.
+func builtinChannel(ctx *Context, args []object.Object, pos source.Pos) (object.Object, error) {
+	capacity := int64(0)
+	if len(args) == 1 {
+		var ok bool
+		capacity, ok = AsIntIndex(args[0])
+		if !ok {
+			return nil, FmtErr("channel() capacity must be an integer, got %s", args[0].Type())
+		}
+		if capacity < 0 {
+			return nil, FmtErr("channel() capacity cannot be negative")
+		}
+	}
+	return object.NewChannel(int(capacity)), nil
+}
+
+// builtinSend sends a value and blocks until a receiver accepts it.
+func builtinSend(ctx *Context, args []object.Object, pos source.Pos) (object.Object, error) {
+	ch, ok := args[0].(*object.Channel)
+	if !ok {
+		return nil, FmtErr("send() expects a channel, got %s", args[0].Type())
+	}
+	if err := ch.Send(args[1]); err != nil {
+		return nil, err
+	}
+	return object.NilValue, nil
+}
+
+// builtinRecv receives a value as an ok result. A closed channel returns an
+// error result so callers can handle shutdown without a runtime exception.
+func builtinRecv(ctx *Context, args []object.Object, pos source.Pos) (object.Object, error) {
+	ch, ok := args[0].(*object.Channel)
+	if !ok {
+		return nil, FmtErr("recv() expects a channel, got %s", args[0].Type())
+	}
+	value, open := ch.Receive()
+	if !open {
+		return object.Result{Ok: false, Message: "channel closed"}, nil
+	}
+	return object.Result{Ok: true, Value: value}, nil
+}
+
+// builtinClose closes a channel and wakes blocked receivers.
+func builtinClose(ctx *Context, args []object.Object, pos source.Pos) (object.Object, error) {
+	ch, ok := args[0].(*object.Channel)
+	if !ok {
+		return nil, FmtErr("close() expects a channel, got %s", args[0].Type())
+	}
+	if err := ch.Close(); err != nil {
+		return nil, err
+	}
+	return object.NilValue, nil
+}
+
+// builtinSpawn starts a zero-argument function in the engine's child context.
+func builtinSpawn(ctx *Context, args []object.Object, pos source.Pos) (object.Object, error) {
+	if ctx.Spawn == nil {
+		return nil, FmtErr("spawn() is unavailable in this execution mode")
+	}
+	return ctx.Spawn(args[0], nil, pos)
+}
+
+// builtinAwait waits for a task and wraps its result in Result. Child
+// failures remain values that the caller can match.
+func builtinAwait(ctx *Context, args []object.Object, pos source.Pos) (object.Object, error) {
+	task, ok := args[0].(*object.Task)
+	if !ok {
+		return nil, FmtErr("await() expects a task, got %s", args[0].Type())
+	}
+	value, err := task.Await()
+	if err != nil {
+		return object.Result{Ok: false, Message: err.Error()}, nil
+	}
+	return object.Result{Ok: true, Value: value}, nil
+}

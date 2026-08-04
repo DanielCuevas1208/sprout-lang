@@ -4,8 +4,9 @@ Sprout is a small programming language that runs on Go.
 It ships with a lexer, a Pratt parser, and two execution engines.
 Version 0.2 added a stack-based bytecode virtual machine.
 Version 0.3 added file-based modules and a build tool.
-Version 0.4 adds structs, methods, and interfaces.
-Version 0.5 adds result types and pattern matching.
+Version 0.4 added structs, methods, and interfaces.
+Version 0.5 added result types and pattern matching.
+Version 0.6 adds channels and tasks.
 The interpreter and the VM share one runtime and one standard library.
 Sprout produces friendly diagnostics that point at the exact problem.
 
@@ -18,6 +19,7 @@ The codebase is structured to grow cleanly over time.
 - A documented grammar with a line-aware Pratt parser.
 - Structs with methods and interface contracts.
 - Result values with `ok` and `err`.
+- Blocking channels and joinable tasks for concurrent functions.
 - A `match` expression with wildcard and variable patterns.
 - A bytecode compiler and a stack-based virtual machine.
 - A tree-walking interpreter that shares the runtime with the VM.
@@ -202,7 +204,8 @@ See `docs/structs.md` for the full reference.
 
 ## Results and pattern matching
 
-Version 0.5 adds result types and pattern matching.
+Version 0.5 added result types and pattern matching.
+Version 0.6 adds channels and tasks.
 A result carries a value or an error message.
 Sprout has no exceptions.
 A function that can fail returns a result.
@@ -236,6 +239,38 @@ Match works on any value, not just results.
 A pattern can bind one name, or test a literal.
 A match must end with a catch-all arm.
 See `docs/results.md` for the full reference.
+
+## Concurrency
+
+Version 0.6 adds channels and tasks.
+A channel moves values between spawned functions.
+A task reports one spawned function.
+
+```sprout
+let jobs = channel()
+let worker = spawn(fn() {
+    send(jobs, 42)
+    return "done"
+})
+
+print(unwrap(recv(jobs)))
+print(unwrap(await(worker)))
+close(jobs)
+```
+
+The example prints this output.
+
+```text
+42
+done
+```
+
+`channel()` creates an unbuffered channel.
+Pass a non-negative integer to create a buffered channel.
+`recv` returns `ok(value)`, or `err("channel closed")` after close.
+`await` returns the worker value or its error as a result.
+Use `close` after all sends finish.
+See `docs/concurrency.md` for the full reference.
 
 ## Modules
 
@@ -316,6 +351,7 @@ Both engines share the runtime, so they behave identically.
 Version 0.3 runs modules on both engines.
 Version 0.4 runs structs and methods on both engines.
 Version 0.5 runs results and match on both engines.
+Version 0.6 runs channels and tasks on both engines.
 
 The `dis` command shows the compiled instructions.
 
@@ -345,6 +381,7 @@ It also provides `assert` for tests and examples.
 Version 0.3 adds `module` for building module values.
 Version 0.4 adds no new builtins. The `type` function reports structs.
 Version 0.5 adds `ok`, `err`, `is_ok`, `is_err`, `unwrap`, and `unwrap_or`.
+Version 0.6 adds `channel`, `send`, `recv`, `close`, `spawn`, and `await`.
 
 ```sprout
 let nums = [1, 2, 3, 4]
@@ -369,6 +406,7 @@ The `examples` directory holds documented programs.
 - `higher_order.spr` uses map, filter, and fold.
 - `structs.spr` uses structs, methods, and interfaces.
 - `results.spr` uses results and pattern matching.
+- `concurrency.spr` coordinates workers with channels and tasks.
 - `guess.spr` is an interactive game.
 - `project` is a multi-file module project.
 
@@ -404,6 +442,7 @@ The parser feeds the checker and the compiler.
 The module loader turns a project into a graph of parsed files.
 The runtime is the single source of truth for both engines.
 A struct type, its methods, and its field access live in one place.
+Channels and tasks live in the object and runtime packages.
 Adding a feature means updating the runtime, then both engines stay in step.
 
 ## Development
@@ -444,17 +483,19 @@ All tests pass on Go 1.22 and newer.
 | `internal/ast` | Source printer round trips. |
 | `internal/module` | Loading, resolution, cycles, and manifests. |
 | `internal/build` | Bundle output and reserved names. |
-| `internal/runtime` | Arithmetic, comparison, indexing, members, and results. |
+| `internal/runtime` | Arithmetic, comparison, indexing, members, results, and concurrency. |
 | `internal/interp` | Evaluation, closures, structs, and runtime errors. |
 | `internal/code` | Opcodes, the builder, and disassembly. |
 | `internal/compiler` | Bytecode for expressions, structs, and control flow. |
 | `internal/vm` | Execution, closures, structs, and runtime errors. |
 | `internal/diag` | Diagnostic rendering. |
+| `internal/object` | Channels, tasks, structs, and shared runtime values. |
 | `test` | Example goldens, engine parity, and command line. |
 
 The parity tests run each program on both engines.
 The VM tests match the same goldens as the interpreter.
 Module tests run projects and bundles on both engines.
+Concurrency tests cover blocking, close, task completion, and engine parity.
 Match programs run on both engines and must agree.
 Tests use only the standard library. They need no network or secrets.
 
@@ -477,7 +518,11 @@ The `match` expression tests a value against patterns.
 It binds pattern names in the arm that wins.
 Results and match run on both engines.
 
-Version 0.6 adds concurrency with channels.
+Version 0.6 is complete. It added channels and joinable tasks.
+Channels wake blocked operations when callers close them.
+Both engines run the same concurrency examples.
+
+Version 0.7 remains open for cancellation, selection, and scheduler controls.
 
 ## Limitations
 
@@ -494,6 +539,10 @@ Version 0.6 adds concurrency with channels.
 - Module resolution is file based. There is no package registry.
 - A bundle reprints module bodies. It does not compress them.
 - A match arm is a block. It cannot be a bare expression.
+- Tasks have no cancellation or timeout operation.
+- A spawned function shares captured mutable values with its parent.
+- Do not mutate captured lists, maps, or structs from multiple tasks.
+- A program must await tasks that it needs before it exits.
 - A pattern binds at most one variable.
 - Match patterns cover literals, names, and results only.
 

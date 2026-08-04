@@ -19,3 +19,7 @@ Thumbs.db
 # Go artifacts
 vendor/
 coverage.out
+
+# Local Go build cache
+.cache-go/
+.cache-mod/

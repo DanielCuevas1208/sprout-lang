@@ -53,6 +53,7 @@ func NewWithIO(stdin io.Reader, stdout, stderr io.Writer) *Interpreter {
 		Call: func(fn object.Object, args []object.Object, pos source.Pos) object.Object {
 			return iv.call(fn, args, pos)
 		},
+		Spawn: iv.spawn,
 	}
 	RegisterBuiltins(iv)
 	return iv

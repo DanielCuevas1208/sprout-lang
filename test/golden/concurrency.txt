@@ -1,0 +1,3 @@
+sum: 42
+workers: left, right
+closed: true

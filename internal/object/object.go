@@ -25,6 +25,8 @@ const (
 	TypeStructTp Type = "struct type"
 	TypeMethod   Type = "method"
 	TypeResult   Type = "result"
+	TypeChannel  Type = "channel"
+	TypeTask     Type = "task"
 )
 
 func (t Type) String() string { return string(t) }

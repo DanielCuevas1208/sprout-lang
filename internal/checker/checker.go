@@ -387,6 +387,15 @@ func (c *checker) staticType(sc *scope, e ast.Expr) string {
 			if id.Name == "ok" || id.Name == "err" {
 				return "result"
 			}
+			if id.Name == "recv" || id.Name == "await" {
+				return "result"
+			}
+			if id.Name == "channel" {
+				return "channel"
+			}
+			if id.Name == "spawn" {
+				return "task"
+			}
 		}
 	case *ast.IntLit:
 		return "int"
@@ -509,6 +518,7 @@ var knownTypes = map[string]bool{
 	"int": true, "float": true, "string": true, "bool": true,
 	"nil": true, "list": true, "map": true, "function": true, "range": true,
 	"struct": true, "struct type": true, "method": true, "result": true,
+	"channel": true, "task": true,
 }
 
 func (c *checker) checkTypeAnn(id *ast.Ident) {

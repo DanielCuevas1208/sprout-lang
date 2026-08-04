@@ -252,6 +252,17 @@ print(unwrap_or(r, "fallback"))`,
     _ => { 0 },
 }
 print(double)`,
+		`let jobs = channel()
+let left = spawn(fn() {
+    send(jobs, 20)
+    return "left"
+})
+let right = spawn(fn() {
+    send(jobs, 22)
+    return "right"
+})
+print(unwrap(recv(jobs)) + unwrap(recv(jobs)))
+print(unwrap(await(left)), unwrap(await(right)))`,
 	}
 
 	for _, src := range cases {

@@ -309,6 +309,7 @@ print(describe(42))      // the number 42
 ```
 
 Read `docs/results.md` for the full reference.
+Read `docs/concurrency.md` for channels and tasks.
 
 ## Assertions
 
@@ -373,6 +374,7 @@ Sprout 0.2 added a stack-based bytecode virtual machine.
 Sprout 0.3 runs modules on both engines.
 Sprout 0.4 runs structs and methods on both engines.
 Sprout 0.5 runs results and match on both engines.
+Sprout 0.6 runs channels and tasks on both engines.
 It shares the parser, the checker, and the standard library with the
 interpreter. The two engines produce the same results.
 

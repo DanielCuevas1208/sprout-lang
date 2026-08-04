@@ -1,6 +1,6 @@
 # Standard Library
 
-This page lists the built-in functions of Sprout 0.5.
+This page lists the built-in functions of Sprout 0.6.
 They are available in every program without an import.
 
 ## Output
@@ -109,6 +109,22 @@ See `docs/results.md` for the full reference.
 
 The build tool uses `module` to reconstruct modules inside a bundle.
 Programs can use it to build module values dynamically.
+
+## Concurrency
+
+| Function | Description |
+|----------|-------------|
+| `channel(capacity?)` | Creates a blocking or buffered channel. |
+| `send(channel, value)` | Sends one value and waits for a receiver. |
+| `recv(channel)` | Receives a result from a channel. |
+| `close(channel)` | Closes a channel. |
+| `spawn(fn)` | Starts a zero-argument function as a task. |
+| `await(task)` | Waits for a task and returns a result. |
+
+`recv` returns `ok(value)` for a value.
+It returns `err("channel closed")` after close.
+`await` returns the worker value or an error result.
+See `docs/concurrency.md` for the full reference.
 
 ## Assertions
 

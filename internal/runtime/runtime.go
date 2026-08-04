@@ -34,6 +34,10 @@ type Context struct {
 	// Call invokes fn with args. Engines use it to call user functions.
 	// The hook reports an error by panicking with the engine's signal.
 	Call func(fn object.Object, args []object.Object, pos source.Pos) object.Object
+
+	// Spawn starts fn in a separate execution context. The hook returns a task
+	// handle so the spawn builtin stays independent of either engine.
+	Spawn func(fn object.Object, args []object.Object, pos source.Pos) (*object.Task, error)
 }
 
 // Builtin is one standard library function.
@@ -109,6 +113,12 @@ var Builtins = []*Builtin{
 	{Name: "is_err", MinArgs: 1, MaxArgs: 1, Fn: builtinIsErr},
 	{Name: "unwrap", MinArgs: 1, MaxArgs: 1, Fn: builtinUnwrap},
 	{Name: "unwrap_or", MinArgs: 2, MaxArgs: 2, Fn: builtinUnwrapOr},
+	{Name: "channel", MinArgs: 0, MaxArgs: 1, Fn: builtinChannel},
+	{Name: "send", MinArgs: 2, MaxArgs: 2, Fn: builtinSend},
+	{Name: "recv", MinArgs: 1, MaxArgs: 1, Fn: builtinRecv},
+	{Name: "close", MinArgs: 1, MaxArgs: 1, Fn: builtinClose},
+	{Name: "spawn", MinArgs: 1, MaxArgs: 1, Fn: builtinSpawn},
+	{Name: "await", MinArgs: 1, MaxArgs: 1, Fn: builtinAwait},
 }
 
 // Names lists the standard library function names.
