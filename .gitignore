@@ -5,6 +5,9 @@
 *.test
 *.out
 
+# Sprout build output
+/out/
+
 # Editor and OS files
 .vscode/
 .idea/

@@ -98,6 +98,12 @@ type VM struct {
 	ctx    runtime.Context
 	stack  []object.Object
 	frames []*frame
+	// prog is the program being executed. OpImport reads its module table.
+	prog *code.Program
+	// modules caches loaded modules so each one runs once per Run.
+	modules map[string]object.Object
+	// moduleStack tracks modules whose bodies are currently running.
+	moduleStack []string
 }
 
 // New returns a VM wired to the process standard streams.
@@ -125,11 +131,18 @@ func NewWithIO(stdin io.Reader, stdout, stderr io.Writer) *VM {
 // *RunError when the program stops with a runtime error.
 func (vm *VM) Run(file *source.File, prog *code.Program) (val object.Object, rerr *RunError) {
 	prevStack, prevFrames := vm.stack, vm.frames
+	prevProg, prevModules, prevStack_ := vm.prog, vm.modules, vm.moduleStack
 	vm.stack = vm.stack[:0]
 	vm.frames = vm.frames[:0]
+	vm.prog = prog
+	vm.modules = make(map[string]object.Object)
+	vm.moduleStack = nil
 	defer func() {
 		vm.stack = prevStack
 		vm.frames = prevFrames
+		vm.prog = prevProg
+		vm.modules = prevModules
+		vm.moduleStack = prevStack_
 		if r := recover(); r != nil {
 			if e, ok := r.(*vmErr); ok {
 				val, rerr = nil, &RunError{Message: e.msg, File: file, Pos: e.pos, Frames: e.frames}
@@ -181,6 +194,37 @@ func (vm *VM) envAt(fr *frame, depth int) *Env {
 		e = e.parent
 	}
 	return e
+}
+
+// importModule loads the module at idx in the program's module table.
+//
+// The module body runs once. Later imports reuse the cached value. A module
+// that imports itself, directly or indirectly, is an import cycle.
+func (vm *VM) importModule(idx int, pos source.Pos) {
+	ref := vm.prog.Modules[idx]
+	if m, ok := vm.modules[ref.Name]; ok {
+		vm.push(m)
+		return
+	}
+	if inModuleStack(vm.moduleStack, ref.Name) {
+		vm.failAtPos(fmt.Sprintf("import cycle involving '%s'", ref.Name), pos)
+	}
+	vm.moduleStack = append(vm.moduleStack, ref.Name)
+	env := &Env{slots: make([]object.Object, ref.Fn.NumSlots)}
+	cl := &Closure{fn: ref.Fn, env: env}
+	m := vm.callValue(cl, nil, pos)
+	vm.moduleStack = vm.moduleStack[:len(vm.moduleStack)-1]
+	vm.modules[ref.Name] = m
+	vm.push(m)
+}
+
+func inModuleStack(stack []string, name string) bool {
+	for _, n := range stack {
+		if n == name {
+			return true
+		}
+	}
+	return false
 }
 
 // callValue invokes a closure or builtin with the given arguments.
@@ -330,6 +374,20 @@ func (vm *VM) runFrames(until int) object.Object {
 				vm.failAtPos(err.Error(), pos)
 			}
 			vm.push(v)
+		case code.OpImport:
+			pos := fr.pos()
+			idx := int(code.U16(fn.Code, fr.ip+1))
+			fr.ip += 3
+			vm.importModule(idx, pos)
+		case code.OpMakeModule:
+			name := fn.Consts[code.U16(fn.Code, fr.ip+1)].(object.Str).Value
+			m := vm.pop().(*object.Map)
+			exports := make(map[string]object.Object, len(m.Keys))
+			for _, k := range m.Keys {
+				exports[k] = m.Vals[k]
+			}
+			vm.push(&object.Module{Name: name, Exports: exports})
+			fr.ip += 3
 		case code.OpSetIndex:
 			pos := fr.pos()
 			fr.ip++

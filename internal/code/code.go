@@ -62,6 +62,8 @@ const (
 	OpLe
 	OpGt
 	OpGe
+	OpImport     // uint16 index into Program.Modules
+	OpMakeModule // uint16 index of the module name constant
 )
 
 // opNames maps an opcode to its disassembly name.
@@ -106,6 +108,8 @@ var opNames = map[Opcode]string{
 	OpLe:          "LE",
 	OpGt:          "GT",
 	OpGe:          "GE",
+	OpImport:      "IMPORT",
+	OpMakeModule:  "MAKE_MODULE",
 }
 
 // String returns the disassembly name of an opcode.
@@ -145,9 +149,19 @@ func (f *Function) String() string {
 	return "<fn " + f.Name + ">"
 }
 
+// ModuleRef names a compiled module and its entry function.
+type ModuleRef struct {
+	// Name is the module name used for caching and diagnostics.
+	Name string
+	// Fn runs the module body and returns an object.Module.
+	Fn *Function
+}
+
 // Program is a compiled Sprout program. Main is the entry function.
 type Program struct {
 	Main *Function
+	// Modules holds every module the program imports, in compile order.
+	Modules []*ModuleRef
 }
 
 // Builder assembles one function's bytecode.
@@ -230,13 +244,19 @@ func U16(b []byte, off int) uint16 {
 
 // disassembler walks an instruction stream and renders each instruction.
 type disassembler struct {
-	fn *Function
-	b  strings.Builder
+	fn  *Function
+	prg *Program // optional; names OpImport operands
+	b   strings.Builder
 }
 
 // Disassemble renders fn as a human-readable instruction listing.
 func Disassemble(fn *Function) string {
-	d := &disassembler{fn: fn}
+	return DisassembleProgram(fn, nil)
+}
+
+// DisassembleProgram renders fn with program context for module operands.
+func DisassembleProgram(fn *Function, prg *Program) string {
+	d := &disassembler{fn: fn, prg: prg}
 	ip := 0
 	for ip < len(fn.Code) {
 		next, ok := d.instruction(ip)
@@ -295,6 +315,24 @@ func (d *disassembler) instruction(ip int) (int, bool) {
 		return ip + 2, true
 	case OpJump, OpJumpIfFalse, OpJumpIfTrue, OpIterNext:
 		fmt.Fprintf(&d.b, "  -> %04d", U16(d.fn.Code, ip+1))
+		return ip + 3, true
+	case OpImport:
+		idx := U16(d.fn.Code, ip+1)
+		name := "<unknown>"
+		if d.prg != nil && int(idx) < len(d.prg.Modules) {
+			name = d.prg.Modules[idx].Name
+		}
+		fmt.Fprintf(&d.b, "  %d  (%s)", idx, name)
+		return ip + 3, true
+	case OpMakeModule:
+		idx := U16(d.fn.Code, ip+1)
+		name := "<unknown>"
+		if int(idx) < len(d.fn.Consts) {
+			if s, ok := d.fn.Consts[idx].(object.Str); ok {
+				name = s.Value
+			}
+		}
+		fmt.Fprintf(&d.b, "  %d  (%s)", idx, name)
 		return ip + 3, true
 	default:
 		return ip + 1, true

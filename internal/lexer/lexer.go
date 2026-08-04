@@ -115,7 +115,7 @@ var singleCharOps = map[byte]token.Kind{
 	'(': token.LPAREN, ')': token.RPAREN,
 	'[': token.LBRACKET, ']': token.RBRACKET,
 	'{': token.LBRACE, '}': token.RBRACE,
-	',': token.COMMA, ':': token.COLON,
+	',': token.COMMA, ':': token.COLON, '.': token.DOT,
 }
 
 func (l *Lexer) lexIdent(pos source.Pos) token.Token {
@@ -238,6 +238,8 @@ func (l *Lexer) consumeEscape(strPos source.Pos) string {
 		return "\r"
 	case '0':
 		return "\x00"
+	case 'x':
+		return l.consumeHexEscape(strPos)
 	case '\\':
 		return "\\"
 	case '"':
@@ -248,6 +250,32 @@ func (l *Lexer) consumeEscape(strPos source.Pos) string {
 		l.errorf(l.currentPos(), "unknown escape sequence '\\%c'", ch)
 		return string(ch)
 	}
+}
+
+// consumeHexEscape decodes a "\xNN" byte escape.
+func (l *Lexer) consumeHexEscape(strPos source.Pos) string {
+	hi, ok1 := l.peekHex()
+	l.advance()
+	lo, ok2 := l.peekHex()
+	l.advance()
+	if !ok1 || !ok2 {
+		l.errorf(l.currentPos(), "expected two hex digits in '\\x' escape")
+		return "\x00"
+	}
+	return string(byte(hi<<4 | lo))
+}
+
+func (l *Lexer) peekHex() (byte, bool) {
+	ch := l.peek()
+	switch {
+	case ch >= '0' && ch <= '9':
+		return ch - '0', true
+	case ch >= 'a' && ch <= 'f':
+		return ch - 'a' + 10, true
+	case ch >= 'A' && ch <= 'F':
+		return ch - 'A' + 10, true
+	}
+	return 0, false
 }
 
 func (l *Lexer) skipLineComment() {

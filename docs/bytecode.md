@@ -99,6 +99,8 @@ This matches the interpreter, so closures see their own copy.
 | SET_INDEX | none | Pop value, index, and container. |
 | BUILD_LIST | count | Build a list. |
 | BUILD_MAP | count | Build a map. |
+| IMPORT | module | Load a module and push its value. |
+| MAKE_MODULE | name | Build a module from a map and a name. |
 | MAKE_ITER | none | Pop an iterable, push an iterator. |
 | ITER_NEXT | target | Advance, jump when done. |
 | NEG | none | Negate the top. |
@@ -115,6 +117,22 @@ This matches the interpreter, so closures see their own copy.
 | LE | none | Test less or equal. |
 | GT | none | Test greater than. |
 | GE | none | Test greater or equal. |
+
+## Modules
+
+An import compiles to `IMPORT` with the module index.
+The operand names the module in the program's module table.
+The VM runs the module body once and caches the result.
+Later imports reuse the cached module value.
+A module that imports itself is an import cycle and fails.
+
+```text
+0000  IMPORT  ; main.spr:1:1  0  (math)
+0003  SET_LOCAL  ; main.spr:1:19  0
+```
+
+A member read compiles to `GET_INDEX` on the module value.
+The `dis` command lists every module below the main function.
 
 ## Short-circuiting
 

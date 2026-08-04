@@ -13,11 +13,15 @@ import (
 
 	"github.com/sprout-lang/sprout/internal/ast"
 	"github.com/sprout-lang/sprout/internal/diag"
+	"github.com/sprout-lang/sprout/internal/module"
 	"github.com/sprout-lang/sprout/internal/object"
 	"github.com/sprout-lang/sprout/internal/runtime"
 	"github.com/sprout-lang/sprout/internal/source"
 	"github.com/sprout-lang/sprout/internal/token"
 )
+
+// ModuleResolver answers an import specifier with its loaded file.
+type ModuleResolver func(spec, fromPath string) (*module.File, bool)
 
 // Interpreter evaluates an AST against an environment chain.
 type Interpreter struct {
@@ -25,6 +29,13 @@ type Interpreter struct {
 	file    *source.File
 	ctx     runtime.Context
 	frames  []diag.Frame
+
+	// Module state. The cache keeps load-once semantics across runs of the
+	// same interpreter. The stack guards against import cycles.
+	resolver      ModuleResolver
+	moduleCache   map[string]*object.Module
+	moduleStack   []string
+	moduleExports map[string]object.Object
 }
 
 // New returns an interpreter wired to the process standard streams.
@@ -49,6 +60,12 @@ func NewWithIO(stdin io.Reader, stdout, stderr io.Writer) *Interpreter {
 
 // Globals returns the top-level environment.
 func (iv *Interpreter) Globals() *Env { return iv.globals }
+
+// SetModuleResolver installs the hook that resolves import statements.
+//
+// Without a resolver, an import fails with a runtime error. The CLI installs
+// a resolver backed by the project's module graph.
+func (iv *Interpreter) SetModuleResolver(r ModuleResolver) { iv.resolver = r }
 
 // RunError is a runtime error with its source position and call stack.
 type RunError struct {
@@ -83,11 +100,20 @@ type continueSignal struct{ pos source.Pos }
 func (iv *Interpreter) Exec(file *source.File, prog *ast.Program) (val object.Object, rerr *RunError) {
 	prevFile := iv.file
 	prevFrames := iv.frames
+	prevStack := iv.moduleStack
+	prevExports := iv.moduleExports
+	if iv.moduleCache == nil {
+		iv.moduleCache = make(map[string]*object.Module)
+	}
 	iv.file = file
 	iv.frames = nil
+	iv.moduleStack = nil
+	iv.moduleExports = nil
 	defer func() {
 		iv.file = prevFile
 		iv.frames = prevFrames
+		iv.moduleStack = prevStack
+		iv.moduleExports = prevExports
 		if r := recover(); r != nil {
 			val = nil
 			rerr = iv.asRunError(r)
@@ -166,11 +192,25 @@ func (iv *Interpreter) evalStmt(s ast.Stmt, env *Env) object.Object {
 			value = iv.evalExpr(n.Value, env)
 		}
 		env.Define(n.Name.Name, value, n.IsConst)
+		if n.Export && iv.moduleExports != nil {
+			iv.moduleExports[n.Name.Name] = value
+		}
+		return object.NilValue
+
+	case *ast.ImportStmt:
+		m, err := iv.loadModule(n.Path, iv.currentFileName())
+		if err != nil {
+			iv.raise(err.Error(), n.ImportPos)
+		}
+		env.Define(n.Name.Name, m, true)
 		return object.NilValue
 
 	case *ast.FnStmt:
 		fn := &Function{Name: n.Name.Name, Params: n.Params, Body: n.Body, Env: env}
 		env.Define(n.Name.Name, fn, true)
+		if n.Export && iv.moduleExports != nil {
+			iv.moduleExports[n.Name.Name] = fn
+		}
 		return object.NilValue
 
 	case *ast.ExprStmt:
@@ -310,6 +350,18 @@ func (iv *Interpreter) evalExpr(e ast.Expr, env *Env) object.Object {
 		v, err := runtime.IndexGet(container, idx)
 		if err != nil {
 			iv.raise(err.Error(), n.Lbracket)
+		}
+		return v
+
+	case *ast.MemberExpr:
+		x := iv.evalExpr(n.X, env)
+		m, ok := x.(*object.Module)
+		if !ok {
+			iv.raise(fmt.Sprintf("cannot access a member of a %s", x.Type()), n.DotPos)
+		}
+		v, exists := m.Exports[n.Name.Name]
+		if !exists {
+			iv.raise(fmt.Sprintf("module '%s' has no exported member '%s'", m.Name, n.Name.Name), n.Name.Position)
 		}
 		return v
 
@@ -468,6 +520,53 @@ func (iv *Interpreter) call(callee object.Object, args []object.Object, pos sour
 	}
 	iv.raise(fmt.Sprintf("cannot call a %s", callee.Type()), pos)
 	return nil
+}
+
+// currentFileName returns the name of the file being evaluated.
+func (iv *Interpreter) currentFileName() string {
+	if iv.file != nil {
+		return iv.file.Name
+	}
+	return ""
+}
+
+// loadModule loads the module named by spec exactly once.
+//
+// The module body executes in a fresh environment. Its exported names are
+// gathered into a module value that the importer can read.
+func (iv *Interpreter) loadModule(spec, fromPath string) (*object.Module, error) {
+	if iv.resolver == nil {
+		return nil, fmt.Errorf("cannot find module '%s'", spec)
+	}
+	f, ok := iv.resolver(spec, fromPath)
+	if !ok {
+		return nil, fmt.Errorf("cannot find module '%s'", spec)
+	}
+	if m, ok := iv.moduleCache[f.Path]; ok {
+		return m, nil
+	}
+	for _, p := range iv.moduleStack {
+		if p == f.Path {
+			return nil, fmt.Errorf("import cycle involving '%s'", module.ModuleName(f.Spec))
+		}
+	}
+
+	iv.moduleStack = append(iv.moduleStack, f.Path)
+	prevFile := iv.file
+	prevExports := iv.moduleExports
+	iv.file = f.Source
+	exports := make(map[string]object.Object)
+	iv.moduleExports = exports
+	defer func() {
+		iv.file = prevFile
+		iv.moduleExports = prevExports
+		iv.moduleStack = iv.moduleStack[:len(iv.moduleStack)-1]
+	}()
+	iv.evalStmts(f.Prog.Stmts, NewEnv(iv.globals))
+
+	m := &object.Module{Name: module.ModuleName(f.Spec), Exports: exports}
+	iv.moduleCache[f.Path] = m
+	return m, nil
 }
 
 func (iv *Interpreter) pushFrame(name string, pos source.Pos) {

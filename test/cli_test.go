@@ -52,12 +52,33 @@ func runCLI(t *testing.T, stdin string, args ...string) (stdout, stderr string, 
 	return out.String(), errb.String(), code
 }
 
+// runCLIIn runs a command with the given working directory.
+func runCLIIn(t *testing.T, dir, stdin string, args ...string) (stdout, stderr string, code int) {
+	t.Helper()
+	cmd := exec.Command(sproutBin, args...)
+	cmd.Dir = dir
+	cmd.Stdin = strings.NewReader(stdin)
+	var out, errb strings.Builder
+	cmd.Stdout = &out
+	cmd.Stderr = &errb
+	err := cmd.Run()
+	code = 0
+	if err != nil {
+		if ee, ok := err.(*exec.ExitError); ok {
+			code = ee.ExitCode()
+		} else {
+			t.Fatalf("run %v: %v", args, err)
+		}
+	}
+	return out.String(), errb.String(), code
+}
+
 func TestVersion(t *testing.T) {
 	out, _, code := runCLI(t, "", "version")
 	if code != 0 {
 		t.Fatalf("version exit code %d", code)
 	}
-	if !strings.Contains(out, "0.2.0") {
+	if !strings.Contains(out, "0.3.0") {
 		t.Errorf("version output: %q", out)
 	}
 }
@@ -232,6 +253,101 @@ func TestUnknownCommand(t *testing.T) {
 		t.Fatalf("unknown command should fail")
 	}
 	if !strings.Contains(errOut, "unknown command") {
+		t.Errorf("stderr: %q", errOut)
+	}
+}
+
+// TestRunProjectEntryFromAnywhere runs a project file and resolves its lib
+// imports through the nearest sprout.toml.
+func TestRunProjectEntryFromAnywhere(t *testing.T) {
+	out, _, code := runCLI(t, "", "run", filepath.Join("..", "examples", "project", "main.spr"))
+	if code != 0 {
+		t.Fatalf("run exit code %d", code)
+	}
+	if !strings.Contains(out, "average: 5.0") {
+		t.Errorf("output: %q", out)
+	}
+	if !strings.Contains(out, "helper calls: 3") {
+		t.Errorf("module state not shared: %q", out)
+	}
+}
+
+func TestRunProjectInsideDir(t *testing.T) {
+	dir := filepath.Join("..", "examples", "project")
+	out, _, code := runCLIIn(t, dir, "", "run")
+	if code != 0 {
+		t.Fatalf("run exit code %d", code)
+	}
+	if !strings.Contains(out, "first: sprout") {
+		t.Errorf("output: %q", out)
+	}
+}
+
+func TestInitThenRun(t *testing.T) {
+	dir := t.TempDir()
+	out, _, code := runCLIIn(t, dir, "", "init", "demo")
+	if code != 0 {
+		t.Fatalf("init exit code %d: %s", code, out)
+	}
+	if !strings.Contains(out, "created project") {
+		t.Errorf("init output: %q", out)
+	}
+	proj := filepath.Join(dir, "demo")
+	for _, want := range []string{"sprout.toml", "main.spr", "lib"} {
+		if _, err := os.Stat(filepath.Join(proj, want)); err != nil {
+			t.Errorf("init did not create %s: %v", want, err)
+		}
+	}
+	out, _, code = runCLIIn(t, proj, "", "run")
+	if code != 0 {
+		t.Fatalf("run exit code %d: %s", code, out)
+	}
+	if !strings.Contains(out, "hello from demo") {
+		t.Errorf("run output: %q", out)
+	}
+}
+
+func TestBuildThenRunBundle(t *testing.T) {
+	dir := t.TempDir()
+	if _, _, code := runCLIIn(t, dir, "", "init", "demo"); code != 0 {
+		t.Fatalf("init failed")
+	}
+	proj := filepath.Join(dir, "demo")
+	out, _, code := runCLIIn(t, proj, "", "build")
+	if code != 0 {
+		t.Fatalf("build exit code %d: %s", code, out)
+	}
+	bundle := filepath.Join(proj, "out", "demo.spr")
+	if _, err := os.Stat(bundle); err != nil {
+		t.Fatalf("bundle not created: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(proj, "out", "demo.spr")); err != nil {
+		t.Fatalf("bundle path: %v", err)
+	}
+	out, _, code = runCLIIn(t, dir, "", "run", bundle)
+	if code != 0 {
+		t.Fatalf("bundle run exit code %d: %s", code, out)
+	}
+	if !strings.Contains(out, "hello from demo") {
+		t.Errorf("bundle output: %q", out)
+	}
+}
+
+func TestBuildRejectsMissingModule(t *testing.T) {
+	dir := t.TempDir()
+	if _, _, code := runCLIIn(t, dir, "", "init", "demo"); code != 0 {
+		t.Fatalf("init failed")
+	}
+	proj := filepath.Join(dir, "demo")
+	src := "import \"ghost\"\nprint(\"done\")\n"
+	if err := os.WriteFile(filepath.Join(proj, "main.spr"), []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, errOut, code := runCLIIn(t, proj, "", "build")
+	if code == 0 {
+		t.Fatalf("build should fail for a missing module")
+	}
+	if !strings.Contains(errOut, "cannot find module 'ghost'") {
 		t.Errorf("stderr: %q", errOut)
 	}
 }

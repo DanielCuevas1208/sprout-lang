@@ -102,6 +102,7 @@ var Builtins = []*Builtin{
 	{Name: "round", MinArgs: 1, MaxArgs: 1, Fn: builtinRound},
 	{Name: "sqrt", MinArgs: 1, MaxArgs: 1, Fn: builtinSqrt},
 	{Name: "assert", MinArgs: 1, MaxArgs: 2, Fn: builtinAssert},
+	{Name: "module", MinArgs: 2, MaxArgs: 2, Fn: builtinModule},
 }
 
 // Names lists the standard library function names.
@@ -443,6 +444,15 @@ func IndexGet(container, idx object.Object) (object.Object, error) {
 			return v, nil
 		}
 		return object.NilValue, nil
+	case *object.Module:
+		ks, ok := idx.(object.Str)
+		if !ok {
+			return nil, FmtErr("module member must be a string")
+		}
+		if v, exists := c.Exports[ks.Value]; exists {
+			return v, nil
+		}
+		return nil, FmtErr("module '%s' has no exported member '%s'", c.Name, ks.Value)
 	}
 	return nil, FmtErr("cannot index a %s", container.Type())
 }
@@ -467,6 +477,8 @@ func SetIndex(container, idx, value object.Object) (object.Object, error) {
 		}
 		c.Set(ks.Value, value)
 		return value, nil
+	case *object.Module:
+		return nil, FmtErr("cannot assign to a member of module '%s'", c.Name)
 	}
 	return nil, FmtErr("cannot assign to an index of a %s", container.Type())
 }

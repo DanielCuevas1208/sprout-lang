@@ -213,6 +213,42 @@ condition is false. It is useful for tests and examples.
 assert(2 + 2 == 4, "math still works")
 ```
 
+## Modules
+
+A module is a separate Sprout file. A program imports it and reads its
+exported names with a dot.
+
+Save `lib/math.spr`.
+
+```sprout
+export fn double(x) {
+    return x * 2
+}
+```
+
+Save `main.spr`.
+
+```sprout
+import "math" as m
+print(m.double(21))     // 42
+```
+
+The import binds the base name of the path. Use `as` to rename it.
+An import may only appear at the top level.
+An export may only appear in a module file.
+A module body runs once, even when several files import it.
+
+A project is a folder with a `sprout.toml` manifest. Create one with
+`sprout init`. Run it with `sprout run` from inside the project.
+
+```toml
+name = "my-project"
+entry = "main.spr"
+lib = ["lib"]
+```
+
+Bare imports search the project's `lib` directories.
+
 ## Interactive mode
 
 Run `sprout repl` to start a session. The session keeps its state between
@@ -227,7 +263,8 @@ sprout> :quit
 
 ## Bytecode virtual machine
 
-Sprout 0.2 adds a stack-based bytecode virtual machine.
+Sprout 0.2 added a stack-based bytecode virtual machine.
+Sprout 0.3 runs modules on both engines.
 It shares the parser, the checker, and the standard library with the
 interpreter. The two engines produce the same results.
 
@@ -250,4 +287,5 @@ Read `docs/bytecode.md` for the full VM reference.
 Read the standard library reference in `docs/stdlib.md`.
 Read the formal grammar in `docs/grammar.md`.
 Read the bytecode virtual machine in `docs/bytecode.md`.
+Read the module system in `docs/modules.md`.
 Run the example programs in the `examples` directory.

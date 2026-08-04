@@ -15,6 +15,7 @@ import (
 
 	"github.com/sprout-lang/sprout/internal/ast"
 	"github.com/sprout-lang/sprout/internal/code"
+	"github.com/sprout-lang/sprout/internal/module"
 	"github.com/sprout-lang/sprout/internal/object"
 	"github.com/sprout-lang/sprout/internal/runtime"
 	"github.com/sprout-lang/sprout/internal/source"
@@ -69,11 +70,33 @@ type Compiler struct {
 	loops []loopInfo
 	// builtins maps a standard library name to its index.
 	builtins map[string]uint16
+	// graph resolves import statements to module files.
+	graph *module.Graph
+	// programModules holds every compiled module, in compile order.
+	programModules []*code.ModuleRef
+	// moduleByPath dedupes modules by their canonical file path.
+	moduleByPath map[string]int
 }
 
 // Compile translates prog into a runnable program.
 func Compile(file *source.File, prog *ast.Program) (p *code.Program, err error) {
-	c := &Compiler{file: file, builtins: builtinIndex()}
+	g := module.NewGraph()
+	g.Entry = &module.File{Source: file, Prog: prog, Path: file.Name, Exports: map[string]source.Pos{}}
+	return CompileModules(g)
+}
+
+// CompileModules compiles an entry file and every module it imports.
+//
+// Each module becomes a function in the program's module table. An import
+// statement compiles to an OpImport that loads the module once and binds the
+// resulting module value to its local name.
+func CompileModules(g *module.Graph) (p *code.Program, err error) {
+	c := &Compiler{
+		file:         g.Entry.Source,
+		builtins:     builtinIndex(),
+		graph:        g,
+		moduleByPath: make(map[string]int),
+	}
 	defer func() {
 		if r := recover(); r != nil {
 			if ce, ok := r.(*compileError); ok {
@@ -83,11 +106,11 @@ func Compile(file *source.File, prog *ast.Program) (p *code.Program, err error) 
 			panic(r)
 		}
 	}()
-	c.pushFn(code.NewBuilder("<main>", file.Name, nil), newScope(nil))
-	c.compileStmts(prog.Stmts)
-	c.b().Add(code.OpReturn, endPos(prog.Stmts))
+	c.pushFn(code.NewBuilder("<main>", g.Entry.Source.Name, nil), newScope(nil))
+	c.compileStmts(g.Entry.Prog.Stmts)
+	c.b().Add(code.OpReturn, endPos(g.Entry.Prog.Stmts))
 	main := c.finishFn()
-	return &code.Program{Main: main}, nil
+	return &code.Program{Main: main, Modules: c.programModules}, nil
 }
 
 // compileError is the panic signal for internal compiler failures.
@@ -237,6 +260,9 @@ func (c *Compiler) compileStmt(s ast.Stmt) {
 		}
 		c.emitSet(n.Name.Name, n.KwPos)
 
+	case *ast.ImportStmt:
+		c.compileImport(n)
+
 	case *ast.FnStmt:
 		idx := c.enterFn(n.Name.Name, n.Params, n.Body)
 		c.b().AddU16(code.OpClosure, idx, n.FnPos)
@@ -272,6 +298,81 @@ func (c *Compiler) compileStmt(s ast.Stmt) {
 	default:
 		c.failf(s.Pos(), "internal error: unsupported statement")
 	}
+}
+
+// compileImport emits the instructions that load a module and bind it.
+func (c *Compiler) compileImport(n *ast.ImportStmt) {
+	c.declare(n.Name.Name, true, n.Name.Position)
+	refIdx := c.moduleRef(n.Path, c.file.Name, n.PathPos)
+	c.b().AddU16(code.OpImport, uint16(refIdx), n.ImportPos)
+	c.emitSet(n.Name.Name, n.Name.Position)
+}
+
+// moduleRef returns the program index of the module named by spec.
+//
+// Each module file compiles to exactly one entry in the program's module
+// table. The table index is reserved before the module body compiles, so
+// nested imports cannot shift it.
+func (c *Compiler) moduleRef(spec, from string, pos source.Pos) int {
+	if c.graph == nil {
+		c.failf(pos, "cannot find module '%s'", spec)
+	}
+	f, ok := c.graph.Resolve(spec, from)
+	if !ok {
+		c.failf(pos, "cannot find module '%s'", spec)
+	}
+	if idx, ok := c.moduleByPath[f.Path]; ok {
+		return idx
+	}
+	idx := len(c.programModules)
+	c.moduleByPath[f.Path] = idx
+	c.programModules = append(c.programModules, &code.ModuleRef{})
+	c.programModules[idx] = &code.ModuleRef{
+		Name: c.graph.ModuleName(f),
+		Fn:   c.compileModuleFn(f),
+	}
+	return idx
+}
+
+// compileModuleFn compiles a module file into a function that returns a
+// module value.
+//
+// The module body runs in its own environment. Exported names stay local;
+// the function gathers their values into a map and wraps it in a module at
+// the end.
+func (c *Compiler) compileModuleFn(f *module.File) *code.Function {
+	prevFile := c.file
+	c.file = f.Source
+	name := c.graph.ModuleName(f)
+
+	sc := newScope(nil)
+	c.pushFn(code.NewBuilder("<module:"+name+">", f.Source.Name, nil), sc)
+	prevLoops := c.loops
+	c.loops = nil
+	c.compileStmts(f.Prog.Stmts)
+	c.emitExportsReturn(f, name)
+	fn := c.finishFn()
+	c.popFn()
+	c.loops = prevLoops
+	c.file = prevFile
+	return fn
+}
+
+// emitExportsReturn appends the instructions that build the module value.
+//
+// The exported names are read from their slots, gathered into a map, wrapped
+// in a module, and returned.
+func (c *Compiler) emitExportsReturn(f *module.File, name string) {
+	end := endPos(f.Prog.Stmts)
+	for _, exported := range f.ExportNames {
+		idx := c.b().Const(object.Str{Value: exported})
+		c.b().AddU16(code.OpPushConst, idx, end)
+		c.emitGet(exported, end)
+	}
+	c.b().AddU16(code.OpBuildMap, uint16(len(f.ExportNames)), end)
+	nameIdx := c.b().Const(object.Str{Value: name})
+	c.b().AddU16(code.OpMakeModule, nameIdx, end)
+	c.b().Add(code.OpReturnValue, end)
 }
 
 func (c *Compiler) compileIf(n *ast.IfStmt) {
@@ -453,6 +554,13 @@ func (c *Compiler) compileExpr(e ast.Expr) {
 		c.compileExpr(n.X)
 		c.compileExpr(n.Index)
 		c.b().Add(code.OpGetIndex, n.Lbracket)
+
+	case *ast.MemberExpr:
+		// A module member reads like an index by a string name.
+		c.compileExpr(n.X)
+		idx := c.b().Const(object.Str{Value: n.Name.Name})
+		c.b().AddU16(code.OpPushConst, idx, n.Name.Position)
+		c.b().Add(code.OpGetIndex, n.DotPos)
 
 	case *ast.FnExpr:
 		idx := c.enterFn("", n.Params, n.Body)

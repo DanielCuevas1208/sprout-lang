@@ -11,6 +11,7 @@ import (
 	"github.com/sprout-lang/sprout/internal/ast"
 	"github.com/sprout-lang/sprout/internal/diag"
 	"github.com/sprout-lang/sprout/internal/interp"
+	"github.com/sprout-lang/sprout/internal/module"
 	"github.com/sprout-lang/sprout/internal/source"
 	"github.com/sprout-lang/sprout/internal/token"
 )
@@ -22,12 +23,15 @@ const (
 	symConst
 	symFunc
 	symParam
+	symModule
 )
 
 type symbol struct {
 	kind    symKind
 	pos     source.Pos
 	typeAnn string
+	// exports lists the members of an imported module symbol.
+	exports map[string]source.Pos
 }
 
 type scope struct {
@@ -41,16 +45,55 @@ func newScope(parent *scope) *scope {
 
 // Check reports the diagnostics found in prog.
 func Check(file *source.File, prog *ast.Program) []diag.Diagnostic {
-	c := &checker{file: file}
+	return CheckContext(Context{}, file, prog)
+}
+
+// Context carries module information that affects how a file is checked.
+type Context struct {
+	// IsModule reports whether the file is loaded as a module. Exports are
+	// only allowed at the top level of a module file.
+	IsModule bool
+	// ModuleExports resolves an import specifier to its exported names. It
+	// returns ok=false when the specifier cannot be resolved.
+	ModuleExports func(spec string) (map[string]source.Pos, bool)
+}
+
+// CheckContext checks a program with module context.
+func CheckContext(ctx Context, file *source.File, prog *ast.Program) []diag.Diagnostic {
+	c := &checker{file: file, isModule: ctx.IsModule, moduleExports: ctx.ModuleExports}
 	c.checkStmts(prog.Stmts, newScope(nil))
 	return c.diags
 }
 
+// CheckGraph checks every file in a module graph.
+//
+// Each module file is checked with its export table available, so member
+// access on imported modules is validated statically.
+func CheckGraph(g *module.Graph) []diag.Diagnostic {
+	var diags []diag.Diagnostic
+	for _, f := range g.Files() {
+		ctx := Context{
+			IsModule: f.IsModule,
+			ModuleExports: func(spec string) (map[string]source.Pos, bool) {
+				target, ok := g.Resolve(spec, f.Path)
+				if !ok {
+					return nil, false
+				}
+				return target.Exports, true
+			},
+		}
+		diags = append(diags, CheckContext(ctx, f.Source, f.Prog)...)
+	}
+	return diags
+}
+
 type checker struct {
-	file      *source.File
-	diags     []diag.Diagnostic
-	funcDepth int
-	loopDepth int
+	file          *source.File
+	isModule      bool
+	moduleExports func(spec string) (map[string]source.Pos, bool)
+	diags         []diag.Diagnostic
+	funcDepth     int
+	loopDepth     int
 }
 
 // builtinNames is the set of predeclared functions.
@@ -88,7 +131,12 @@ func (c *checker) checkStmt(s ast.Stmt, sc *scope) {
 	switch n := s.(type) {
 	case *ast.LetStmt:
 		c.checkLet(n, sc)
+	case *ast.ImportStmt:
+		c.checkImport(n, sc)
 	case *ast.FnStmt:
+		if n.Export {
+			c.checkExportPos(n.Name.Position)
+		}
 		funcScope := newScope(sc)
 		for _, p := range n.Params {
 			c.checkParam(funcScope, p)
@@ -153,7 +201,46 @@ func (c *checker) checkParam(sc *scope, p *ast.Param) {
 	}
 }
 
+// checkImport resolves an import and declares its module name.
+//
+// Imports bind in the file's top-level scope, so a nested import is an
+// error. The module loader only looks for imports at the top level.
+func (c *checker) checkImport(n *ast.ImportStmt, sc *scope) {
+	if c.funcDepth > 0 || c.loopDepth > 0 {
+		c.errorf(n.ImportPos, "import can only appear at the top level of a file")
+		return
+	}
+	if c.moduleExports == nil {
+		c.errorf(n.PathPos, "cannot find module '%s'", n.Path)
+		return
+	}
+	exports, ok := c.moduleExports(n.Path)
+	if !ok {
+		c.errorf(n.PathPos, "cannot find module '%s'", n.Path)
+		return
+	}
+	if _, dup := sc.names[n.Name.Name]; dup {
+		c.errorf(n.Name.Position, "duplicate declaration of '%s'", n.Name.Name)
+		return
+	}
+	sc.names[n.Name.Name] = symbol{kind: symModule, pos: n.Name.Position, exports: exports}
+}
+
+// checkExportPos rejects exports that a module cannot honor.
+func (c *checker) checkExportPos(pos source.Pos) {
+	if !c.isModule {
+		c.errorf(pos, "export can only appear in a module file")
+		return
+	}
+	if c.funcDepth > 0 || c.loopDepth > 0 {
+		c.errorf(pos, "export can only appear at the top level of a module")
+	}
+}
+
 func (c *checker) checkLet(n *ast.LetStmt, sc *scope) {
+	if n.Export {
+		c.checkExportPos(n.Name.Position)
+	}
 	var typeAnn string
 	if n.Type != nil {
 		c.checkTypeAnn(n.Type)
@@ -255,6 +342,8 @@ func (c *checker) checkExpr(e ast.Expr, sc *scope) {
 	case *ast.IndexExpr:
 		c.checkExpr(n.X, sc)
 		c.checkExpr(n.Index, sc)
+	case *ast.MemberExpr:
+		c.checkMember(n, sc)
 	case *ast.UnaryExpr:
 		c.checkExpr(n.X, sc)
 	case *ast.BinaryExpr:
@@ -283,6 +372,23 @@ func (c *checker) checkExpr(e ast.Expr, sc *scope) {
 func (c *checker) resolve(sc *scope, name string) bool {
 	_, ok := c.lookup(sc, name)
 	return ok
+}
+
+// checkMember validates a member access on a module value.
+//
+// An imported module name gets a static check against the module's export
+// table, so a typo in a member name fails before the program runs. Any other
+// base is left to the runtime; a module value built by module() or by a
+// bundle cannot be resolved statically.
+func (c *checker) checkMember(n *ast.MemberExpr, sc *scope) {
+	if id, ok := n.X.(*ast.Ident); ok {
+		if sym, found := c.lookup(sc, id.Name); found && sym.kind == symModule {
+			if _, exported := sym.exports[n.Name.Name]; !exported {
+				c.errorf(n.Name.Position, "module '%s' has no exported member '%s'", id.Name, n.Name.Name)
+			}
+		}
+	}
+	c.checkExpr(n.X, sc)
 }
 
 func (c *checker) lookup(sc *scope, name string) (symbol, bool) {

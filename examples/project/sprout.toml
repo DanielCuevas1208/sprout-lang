@@ -1,0 +1,4 @@
+name = "report"
+version = "0.1.0"
+entry = "main.spr"
+lib = ["lib"]

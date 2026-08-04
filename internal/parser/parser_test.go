@@ -151,6 +151,30 @@ func TestStatements(t *testing.T) {
 			"let g = fn(x) { return x }",
 			"(program (let g value (fn (params x) (block (return value x)))))",
 		},
+		{
+			`import "util"`,
+			`(program (import "util" as util))`,
+		},
+		{
+			`import "lib/util.spr" as u`,
+			`(program (import "lib/util.spr" as u))`,
+		},
+		{
+			"export let x = 1",
+			"(program (export let x value (int 1)))",
+		},
+		{
+			"export fn f() { return 1 }",
+			"(program (export fn f (params) (block (return value (int 1)))))",
+		},
+		{
+			"let m = util.greet()",
+			"(program (let m value (call (member util .greet))))",
+		},
+		{
+			"print(util.x)",
+			"(program (call print (member util .x)))",
+		},
 	}
 	for _, c := range cases {
 		expectParse(t, c.src, c.want)

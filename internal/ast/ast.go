@@ -72,9 +72,11 @@ func (p *Param) End() source.Pos {
 }
 
 // LetStmt declares a variable (IsConst == false) or a constant.
+// Export marks the name as visible to importers of the file.
 type LetStmt struct {
 	KwPos   source.Pos
 	IsConst bool
+	Export  bool
 	Name    *Ident
 	Type    *Ident // optional type annotation
 	Value   Expr
@@ -93,8 +95,10 @@ func (s *LetStmt) End() source.Pos {
 func (*LetStmt) stmt() {}
 
 // FnStmt declares a named function.
+// Export marks the name as visible to importers of the file.
 type FnStmt struct {
 	FnPos  source.Pos
+	Export bool
 	Name   *Ident
 	Params []*Param
 	Body   *Block
@@ -347,6 +351,39 @@ func (n *CallExpr) Pos() source.Pos {
 func (n *CallExpr) End() source.Pos { return n.Lparen }
 func (*CallExpr) expr()             {}
 
+// ImportStmt loads a module and binds it to a local name.
+type ImportStmt struct {
+	ImportPos source.Pos
+	// Path is the module specifier, for example "lib/util" or "./util.spr".
+	Path    string
+	PathPos source.Pos
+	// Name is the name the module is bound to in the importing scope.
+	Name *Ident
+}
+
+func (s *ImportStmt) Pos() source.Pos { return s.ImportPos }
+func (s *ImportStmt) End() source.Pos {
+	if s.Name != nil {
+		return s.Name.End()
+	}
+	return s.ImportPos
+}
+func (*ImportStmt) stmt() {}
+
+// MemberExpr reads a named member of a module value.
+//
+// The member is stored in the AST as a name so the checker can validate it
+// against the module's export table without re-tokenizing the source.
+type MemberExpr struct {
+	X      Expr
+	DotPos source.Pos
+	Name   *Ident
+}
+
+func (n *MemberExpr) Pos() source.Pos { return n.X.Pos() }
+func (n *MemberExpr) End() source.Pos { return n.Name.End() }
+func (*MemberExpr) expr()             {}
+
 // IndexExpr reads an element from a container.
 type IndexExpr struct {
 	X        Expr
@@ -401,6 +438,9 @@ func (p *printer) node(n Node) {
 		if v.IsConst {
 			kw = "const"
 		}
+		if v.Export {
+			kw = "export " + kw
+		}
 		p.group(kw, func() {
 			p.name(v.Name)
 			if v.Type != nil {
@@ -409,7 +449,11 @@ func (p *printer) node(n Node) {
 			p.exprField("value", v.Value)
 		})
 	case *FnStmt:
-		p.group("fn "+v.Name.Name, func() {
+		head := "fn " + v.Name.Name
+		if v.Export {
+			head = "export " + head
+		}
+		p.group(head, func() {
 			p.params(v.Params)
 			p.block(v.Body)
 		})
@@ -440,6 +484,13 @@ func (p *printer) node(n Node) {
 		})
 	case *ReturnStmt:
 		p.group("return", func() { p.exprField("value", v.Value) })
+	case *ImportStmt:
+		p.group("import", func() {
+			p.field(strconv.Quote(v.Path))
+			if v.Name != nil {
+				p.field("as " + v.Name.Name)
+			}
+		})
 	case *BreakStmt:
 		p.group("break", nil)
 	case *ContinueStmt:
@@ -502,6 +553,11 @@ func (p *printer) node(n Node) {
 		p.group("index", func() {
 			p.node(v.X)
 			p.node(v.Index)
+		})
+	case *MemberExpr:
+		p.group("member", func() {
+			p.node(v.X)
+			p.field("." + v.Name.Name)
 		})
 	case *FnExpr:
 		p.group("fn", func() {
@@ -605,6 +661,14 @@ func spaces(n int) []byte {
 	return s
 }
 
+// formatFloat renders f as a Sprout float literal.
+//
+// A value like 1.0 must keep a decimal point or exponent so that re-parsing
+// yields a float, not an integer. The lexer reads "1" as an integer.
 func formatFloat(f float64) string {
-	return strconv.FormatFloat(f, 'g', -1, 64)
+	s := strconv.FormatFloat(f, 'g', -1, 64)
+	if !strings.ContainsAny(s, ".eE") {
+		s += ".0"
+	}
+	return s
 }

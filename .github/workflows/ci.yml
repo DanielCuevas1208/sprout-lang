@@ -16,7 +16,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest, windows-latest]
-        go: ["1.22.x", "1.23.x", "1.24.x"]
+        go: ["1.22.x", "1.23.x", "1.24.x", "1.25.x"]
 
     steps:
       - name: Check out the repository
@@ -34,6 +34,16 @@ jobs:
           if [ -n "$unformatted" ]; then
             echo "These files are not formatted:"
             echo "$unformatted"
+            exit 1
+          fi
+        shell: bash
+
+      - name: Check module files are tidy
+        run: |
+          go mod tidy
+          if [ -n "$(git status --porcelain go.mod go.sum)" ]; then
+            echo "go.mod or go.sum is not tidy."
+            git diff go.mod go.sum
             exit 1
           fi
         shell: bash

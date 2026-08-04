@@ -50,6 +50,7 @@ var precedences = map[token.Kind]int{
 	token.CARET:    precPower,
 	token.LPAREN:   precCall,
 	token.LBRACKET: precCall,
+	token.DOT:      precCall,
 }
 
 // Parser turns tokens into an AST.
@@ -100,6 +101,10 @@ func (p *Parser) parseStatement() ast.Stmt {
 		return p.parseLet(false)
 	case token.CONST:
 		return p.parseLet(true)
+	case token.EXPORT:
+		return p.parseExport()
+	case token.IMPORT:
+		return p.parseImport()
 	case token.FN:
 		if p.peek(1).Kind == token.IDENT {
 			return p.parseFnDecl()
@@ -158,6 +163,78 @@ func (p *Parser) parseLet(isConst bool) ast.Stmt {
 		p.errorf(p.cur().Pos, "expected a value after '=', found %s", tokenString(p.cur()))
 	}
 	return &ast.LetStmt{KwPos: kw.Pos, IsConst: isConst, Name: name, Type: typeName, Value: value}
+}
+
+// parseExport parses "export" followed by a declaration.
+//
+// Only let, const, and function declarations can be exported. Anything else
+// is a syntax error, and the checker rejects exports outside a module file.
+func (p *Parser) parseExport() ast.Stmt {
+	exportTok := p.next() // export
+	switch p.cur().Kind {
+	case token.LET:
+		st := p.parseLet(false)
+		if st != nil {
+			st.(*ast.LetStmt).Export = true
+		}
+		return st
+	case token.CONST:
+		st := p.parseLet(true)
+		if st != nil {
+			st.(*ast.LetStmt).Export = true
+		}
+		return st
+	case token.FN:
+		st := p.parseFnDecl()
+		if st != nil {
+			st.(*ast.FnStmt).Export = true
+		}
+		return st
+	}
+	p.errorf(exportTok.Pos, "expected a declaration after 'export', found %s", tokenString(p.cur()))
+	p.recoverStatement()
+	return nil
+}
+
+// parseImport parses "import" STRING ["as" identifier].
+func (p *Parser) parseImport() ast.Stmt {
+	importTok := p.next() // import
+	p.skipNewlines()
+
+	if !p.at(token.STRING) {
+		p.errorf(p.cur().Pos, "expected a module path after 'import', found %s", tokenString(p.cur()))
+		p.recoverStatement()
+		return nil
+	}
+	pathTok := p.next()
+	path := pathTok.Value
+
+	name := &ast.Ident{Name: defaultModuleName(path), Position: importTok.Pos}
+	if p.at(token.AS) {
+		p.next()
+		alias := p.expectIdent("a name after 'as'")
+		if alias == nil {
+			return nil
+		}
+		name = alias
+	}
+
+	return &ast.ImportStmt{ImportPos: importTok.Pos, Path: path, PathPos: pathTok.Pos, Name: name}
+}
+
+// defaultModuleName derives the binding name of an import from its path.
+//
+// "lib/util" and "./lib/util.spr" both bind the name "util".
+func defaultModuleName(path string) string {
+	base := path
+	if i := strings.LastIndex(base, "/"); i >= 0 {
+		base = base[i+1:]
+	}
+	base = strings.TrimSuffix(base, ".spr")
+	if base == "" {
+		return "module"
+	}
+	return base
 }
 
 func (p *Parser) parseFnDecl() ast.Stmt {
@@ -323,6 +400,11 @@ func (p *Parser) parseExpression(prec int) ast.Expr {
 		case token.LBRACKET:
 			// parseIndex consumes the '[' itself.
 			left = p.parseIndex(left)
+			if left == nil {
+				return nil
+			}
+		case token.DOT:
+			left = p.parseMember(left)
 			if left == nil {
 				return nil
 			}
@@ -502,6 +584,17 @@ func (p *Parser) parseIndex(x ast.Expr) ast.Expr {
 	p.close()
 	p.next()
 	return &ast.IndexExpr{X: x, Lbracket: open.Pos, Index: idx}
+}
+
+// parseMember parses a "." name suffix as a member access.
+func (p *Parser) parseMember(x ast.Expr) ast.Expr {
+	dot := p.next() // .
+	name := p.expectIdent("a member name after '.'")
+	if name == nil {
+		p.recoverStatement()
+		return nil
+	}
+	return &ast.MemberExpr{X: x, DotPos: dot.Pos, Name: name}
 }
 
 func (p *Parser) parseList() ast.Expr {
@@ -766,6 +859,8 @@ func assignTargetDesc(e ast.Expr) string {
 		return "an index"
 	case *ast.CallExpr:
 		return "a call result"
+	case *ast.MemberExpr:
+		return "a module member"
 	}
 	return "this expression"
 }

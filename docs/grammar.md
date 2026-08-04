@@ -1,6 +1,6 @@
 # Sprout Grammar
 
-This document is the formal grammar of Sprout version 0.2.
+This document is the formal grammar of Sprout version 0.3.
 
 ## Notation
 
@@ -25,6 +25,7 @@ comment       := "//" {any char except newline}
 string        := '"' {char | escape} '"'
                | '`' {any char except '`'} '`'
 escape        := "\n" | "\t" | "\r" | "\0" | "\\" | '"' | "'"
+               | "\x" hex_digit hex_digit
 integer       := digit {digit | "_"}
 float         := integer "." digit {digit | "_"} [exponent]
                | integer exponent
@@ -32,6 +33,7 @@ exponent      := ("e" | "E") ["+" | "-"] digit {digit}
 identifier    := letter {letter | digit | "_"}
 ```
 
+A `\x` escape writes one byte from two hex digits.
 Numbers do not start or end with an underscore.
 A floating-point literal needs a digit before the decimal point.
 
@@ -39,11 +41,27 @@ A floating-point literal needs a digit before the decimal point.
 
 ```
 program       := statement*
-statement     := let_decl | const_decl | fn_decl
+statement     := import_stmt | let_decl | const_decl | fn_decl
+               | export_stmt
                | if_stmt | while_stmt | for_stmt
                | return_stmt | break_stmt | continue_stmt
                | expr_stmt
 ```
+
+## Imports and exports
+
+An import loads another Sprout file and binds it to a name.
+A module exposes names with `export`.
+
+```
+import_stmt   := "import" string ["as" identifier]
+export_stmt   := "export" (let_decl | const_decl | fn_decl)
+```
+
+An import and an export may only appear at the top level.
+An export may only appear in a module file, which is a file loaded by an
+import. The binding name of an import is the base name of its path unless
+the `as` clause renames it.
 
 ## Declarations
 
@@ -94,7 +112,7 @@ primary       := integer | float | string | "true" | "false" | "nil"
                | identifier | fn_expr
                | "(" expr ")"
                | list_lit | map_lit
-               | call | index
+               | call | index | member
 ```
 
 The unary minus binds looser than power. So `-3 ^ 2` means `-(3 ^ 2)`.
@@ -105,7 +123,10 @@ map_lit       := "{" [ map_entry {"," map_entry} [","] ] "}"
 map_entry     := expr ":" expr
 call          := primary "(" [ expr {"," expr} [","] ] ")"
 index         := primary "[" expr "]"
+member        := primary "." identifier
 ```
+
+A member access reads an exported name of a module value.
 
 ## Precedence table
 
@@ -120,7 +141,7 @@ index         := primary "[" expr "]"
 | 7     | `*` `/` `%` | left        |
 | 8     | `-` `not` (prefix) | right |
 | 9     | `^`       | right         |
-| 10    | call, index | left       |
+| 10    | call, index, member | left |
 
 ## Line continuation
 

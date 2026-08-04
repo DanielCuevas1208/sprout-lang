@@ -515,6 +515,26 @@ func builtinAssert(ctx *Context, args []object.Object, pos source.Pos) (object.O
 	return nil, FmtErr("assertion failed")
 }
 
+// builtinModule wraps a map into a module value.
+//
+// The build tool uses it to construct modules inside a bundle. Programs can
+// use it to create module values dynamically.
+func builtinModule(ctx *Context, args []object.Object, pos source.Pos) (object.Object, error) {
+	name, ok := args[0].(object.Str)
+	if !ok {
+		return nil, FmtErr("module() name must be a string, got %s", args[0].Type())
+	}
+	m, ok := args[1].(*object.Map)
+	if !ok {
+		return nil, FmtErr("module() exports must be a map, got %s", args[1].Type())
+	}
+	exports := make(map[string]object.Object, len(m.Keys))
+	for _, k := range m.Keys {
+		exports[k] = m.Vals[k]
+	}
+	return &object.Module{Name: name.Value, Exports: exports}, nil
+}
+
 func writeLine(w io.Writer, s string) {
 	if w == nil {
 		return

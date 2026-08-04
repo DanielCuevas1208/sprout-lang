@@ -1,6 +1,6 @@
 # Standard Library
 
-This page lists the built-in functions of Sprout 0.2.
+This page lists the built-in functions of Sprout 0.3.
 They are available in every program without an import.
 
 ## Output
@@ -83,6 +83,15 @@ Map keys are strings. Maps keep insertion order.
 | `ceil(n)` | Rounds up to an integer. |
 | `round(n)` | Rounds to the nearest integer. |
 | `sqrt(n)` | Returns the square root. |
+
+## Modules
+
+| Function | Description |
+|----------|-------------|
+| `module(name, exports)` | Wraps a map into a module value. |
+
+The build tool uses `module` to reconstruct modules inside a bundle.
+Programs can use it to build module values dynamically.
 
 ## Assertions
 

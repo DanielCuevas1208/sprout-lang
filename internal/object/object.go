@@ -20,6 +20,7 @@ const (
 	TypeMap      Type = "map"
 	TypeFunction Type = "function"
 	TypeRange    Type = "range"
+	TypeModule   Type = "module"
 )
 
 func (t Type) String() string { return string(t) }
@@ -176,6 +177,20 @@ func (r Range) String() string {
 		return fmt.Sprintf("range(%d, %d)", r.Start, r.End)
 	}
 	return fmt.Sprintf("range(%d, %d, %d)", r.Start, r.End, r.Step)
+}
+
+// Module is the value produced by importing a Sprout file.
+//
+// Its Exports map holds the current value of each exported name. Member
+// access reads from this map. Modules are immutable to the importer.
+type Module struct {
+	Name    string
+	Exports map[string]Object
+}
+
+func (m *Module) Type() Type { return TypeModule }
+func (m *Module) String() string {
+	return fmt.Sprintf("<module %s>", m.Name)
 }
 
 // Repr renders o in a form that is close to its source literal.

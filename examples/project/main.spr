@@ -1,0 +1,19 @@
+// A small report built from two library modules.
+//
+// stats.spr and words.spr live in the lib directory. The manifest names
+// main.spr as the entry, so a bare `sprout run` inside this folder works.
+// Try `sprout build` too: it bundles the whole project into one file.
+
+import "stats" as stats
+import "words" as words
+
+let scores = [7, 3, 9, 5, 1]
+print("scores:", scores)
+print("low:", stats.min(scores))
+print("high:", stats.max(scores))
+print("average:", stats.mean(scores))
+print("helper calls:", stats.times_used())
+
+let line = "sprout keeps the standard library small"
+print("words:", words.count(line))
+print("first:", words.first(line))

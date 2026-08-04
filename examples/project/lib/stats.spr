@@ -1,0 +1,42 @@
+// Small statistics helpers with a shared counter.
+//
+// The counter lives in this module's own scope. Every function that touches
+// it shares one value, because a module body runs exactly once. Import this
+// file from two places and the counter is still one value.
+
+let calls = 0
+
+export fn min(nums) {
+    calls = calls + 1
+    let best = nums[0]
+    for x in nums {
+        if x < best {
+            best = x
+        }
+    }
+    return best
+}
+
+export fn max(nums) {
+    calls = calls + 1
+    let best = nums[0]
+    for x in nums {
+        if x > best {
+            best = x
+        }
+    }
+    return best
+}
+
+export fn mean(nums) {
+    calls = calls + 1
+    let total = 0
+    for x in nums {
+        total = total + x
+    }
+    return total * 1.0 / len(nums)
+}
+
+export fn times_used() {
+    return calls
+}
