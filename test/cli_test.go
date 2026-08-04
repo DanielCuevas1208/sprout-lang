@@ -57,7 +57,7 @@ func TestVersion(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("version exit code %d", code)
 	}
-	if !strings.Contains(out, "0.2.0") {
+	if !strings.Contains(out, "0.3.0") {
 		t.Errorf("version output: %q", out)
 	}
 }
@@ -232,6 +232,49 @@ func TestUnknownCommand(t *testing.T) {
 		t.Fatalf("unknown command should fail")
 	}
 	if !strings.Contains(errOut, "unknown command") {
+		t.Errorf("stderr: %q", errOut)
+	}
+}
+
+func TestRunModulesOnInterp(t *testing.T) {
+	out, _, code := runCLI(t, "", "run", filepath.Join("..", "examples", "modules.spr"))
+	if code != 0 {
+		t.Fatalf("run exit code %d", code)
+	}
+	if !strings.Contains(out, "25\n27\n42\nHI!\nquiet\nnil") {
+		t.Errorf("output: %q", out)
+	}
+}
+
+func TestRunModulesOnVM(t *testing.T) {
+	out, _, code := runCLI(t, "", "vm", filepath.Join("..", "examples", "modules.spr"))
+	if code != 0 {
+		t.Fatalf("vm exit code %d", code)
+	}
+	if !strings.Contains(out, "25\n27\n42\nHI!\nquiet\nnil") {
+		t.Errorf("output: %q", out)
+	}
+}
+
+func TestCheckImportedGraph(t *testing.T) {
+	dir := t.TempDir()
+	lib := filepath.Join(dir, "lib")
+	if err := os.MkdirAll(lib, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	main := filepath.Join(dir, "main.spr")
+	if err := os.WriteFile(main, []byte("import \"lib/broken\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	broken := filepath.Join(lib, "broken.spr")
+	if err := os.WriteFile(broken, []byte("export let x = missing_name\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, errOut, code := runCLI(t, "", "check", main)
+	if code == 0 {
+		t.Fatalf("check should fail, exit code 0")
+	}
+	if !strings.Contains(errOut, "undefined name 'missing_name'") {
 		t.Errorf("stderr: %q", errOut)
 	}
 }

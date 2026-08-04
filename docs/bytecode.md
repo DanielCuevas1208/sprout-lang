@@ -101,6 +101,8 @@ This matches the interpreter, so closures see their own copy.
 | BUILD_MAP | count | Build a map. |
 | MAKE_ITER | none | Pop an iterable, push an iterator. |
 | ITER_NEXT | target | Advance, jump when done. |
+| IMPORT | index | Load a module and push it. |
+| EXPORT | index | Record the top value as an export. |
 | NEG | none | Negate the top. |
 | NOT | none | Invert the truthiness. |
 | ADD | none | Add the top two values. |
@@ -137,6 +139,22 @@ This guarantees identical results.
 The runtime covers arithmetic, comparison, indexing, and iteration.
 It also owns the standard library.
 A builtin is a runtime value with a name and a Go function.
+
+## Modules
+
+The compiler turns an `import` statement into an `IMPORT` instruction.
+The instruction carries the module path from the constant pool.
+The VM loads the module through the shared module loader and pushes it.
+
+The `export` keyword compiles the wrapped declaration, then reads the
+declared name and records it with an `EXPORT` instruction.
+A program that runs as a module fills an export table with these names.
+A program that runs directly ignores the table.
+
+The VM runs every imported module on a fresh VM.
+All modules share one loader, so caching and cycle detection span the
+whole import graph.
+See `docs/modules.md` for the language-level rules.
 
 ## Errors
 

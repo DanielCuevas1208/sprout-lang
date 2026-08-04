@@ -109,6 +109,35 @@ func (s *FnStmt) End() source.Pos {
 }
 func (*FnStmt) stmt() {}
 
+// ImportStmt loads a module and binds it to a name.
+//
+// The module runs once, in its own scope. Only its exported names are
+// visible through the module value.
+type ImportStmt struct {
+	ImportPos source.Pos
+	// Path is the module path as written in the source.
+	Path string
+	// Alias is the name bound to the loaded module.
+	Alias string
+}
+
+func (s *ImportStmt) Pos() source.Pos { return s.ImportPos }
+func (s *ImportStmt) End() source.Pos {
+	return source.Pos{Line: s.ImportPos.Line, Column: s.ImportPos.Column + len(s.Path)}
+}
+func (*ImportStmt) stmt() {}
+
+// ExportStmt marks a top-level declaration as visible to importers.
+type ExportStmt struct {
+	ExportPos source.Pos
+	// Decl is the wrapped declaration: a LetStmt, or an FnStmt.
+	Decl Stmt
+}
+
+func (s *ExportStmt) Pos() source.Pos { return s.ExportPos }
+func (s *ExportStmt) End() source.Pos { return s.Decl.End() }
+func (*ExportStmt) stmt()             {}
+
 // Block is a sequence of statements between braces.
 type Block struct {
 	Lbrace source.Pos
@@ -413,6 +442,12 @@ func (p *printer) node(n Node) {
 			p.params(v.Params)
 			p.block(v.Body)
 		})
+	case *ImportStmt:
+		p.group("import "+v.Alias, func() {
+			p.atom(strconv.Quote(v.Path))
+		})
+	case *ExportStmt:
+		p.group("export", func() { p.node(v.Decl) })
 	case *IfStmt:
 		p.group("if", func() {
 			p.exprField("cond", v.Cond)

@@ -165,6 +165,54 @@ func TestMultiline(t *testing.T) {
 	}
 }
 
+func TestImportExport(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{
+			`import "lib/math"`,
+			`(program (import math "lib/math"))`,
+		},
+		{
+			`import "lib/math" as m`,
+			`(program (import m "lib/math"))`,
+		},
+		{
+			`import "strings.spr"`,
+			`(program (import strings "strings.spr"))`,
+		},
+		{
+			"export fn square(x) { return x * x }",
+			"(program (export (fn square (params x) (block (return value (binary * x x))))))",
+		},
+		{
+			"export const pi = 3.14",
+			"(program (export (const pi value (float 3.14))))",
+		},
+		{
+			"export let answer = 42",
+			"(program (export (let answer value (int 42))))",
+		},
+	}
+	for _, c := range cases {
+		expectParse(t, c.src, c.want)
+	}
+}
+
+func TestImportExportErrors(t *testing.T) {
+	cases := []struct {
+		src  string
+		want string
+	}{
+		{"import 42", "expected a module path"},
+		{`import "lib/a-b"`, "not a valid identifier"},
+		{`import "lib/x" as 5`, "expected a name after 'as'"},
+		{"export while true { }", "expected 'let'"},
+		{"export", "expected 'let'"},
+	}
+	for _, c := range cases {
+		expectErrors(t, c.src, c.want)
+	}
+}
+
 func TestParseErrors(t *testing.T) {
 	cases := []struct {
 		src  string

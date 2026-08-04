@@ -2,11 +2,14 @@ package test
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/sprout-lang/sprout/internal/checker"
 	"github.com/sprout-lang/sprout/internal/compiler"
+	"github.com/sprout-lang/sprout/internal/diag"
 	"github.com/sprout-lang/sprout/internal/interp"
 	"github.com/sprout-lang/sprout/internal/parser"
 	"github.com/sprout-lang/sprout/internal/source"
@@ -186,5 +189,128 @@ func TestEnginesAgreeOnErrors(t *testing.T) {
 		if ivErr.Error() != vmErr.Error() {
 			t.Errorf("error messages differ for:\n%s\ninterp: %q\n    vm: %q", src, ivErr.Error(), vmErr.Error())
 		}
+	}
+}
+
+// runInterpFile runs the Sprout file at path on the tree-walking interpreter.
+func runInterpFile(path string) (string, error) {
+	text, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	var stdout, stderr strings.Builder
+	iv := interp.NewWithIO(strings.NewReader(""), &stdout, &stderr)
+	file := source.NewFile(path, string(text))
+	prog, diags := parser.Parse(file)
+	for _, d := range diags {
+		if d.Severity == diag.SeverityError {
+			return "", errors.New("parse error: " + d.Message)
+		}
+	}
+	_, rerr := iv.Exec(file, prog)
+	if rerr != nil {
+		return stdout.String(), rerr
+	}
+	return stdout.String(), nil
+}
+
+// runVMFile runs the Sprout file at path on the bytecode virtual machine.
+func runVMFile(path string) (string, error) {
+	text, err := os.ReadFile(path)
+	if err != nil {
+		return "", err
+	}
+	var stdout, stderr strings.Builder
+	file := source.NewFile(path, string(text))
+	prog, diags := parser.Parse(file)
+	for _, d := range diags {
+		if d.Severity == diag.SeverityError {
+			return "", errors.New("parse error: " + d.Message)
+		}
+	}
+	if diags := checker.Check(file, prog); len(diags) > 0 {
+		return "", errors.New(diags[0].Message)
+	}
+	compiled, err := compiler.Compile(file, prog)
+	if err != nil {
+		return "", err
+	}
+	machine := vm.NewWithIO(strings.NewReader(""), &stdout, &stderr)
+	_, rerr := machine.Run(file, compiled)
+	if rerr != nil {
+		return stdout.String(), rerr
+	}
+	return stdout.String(), nil
+}
+
+// writeTestModule writes a module file under dir, creating subdirectories.
+func writeTestModule(t *testing.T, dir, name, src string) {
+	t.Helper()
+	path := filepath.Join(dir, name)
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestEnginesAgreeOnModules runs programs that import modules on both
+// engines and checks that their output matches.
+//
+// Modules exercise the loader, the module cache, and cross-module closures,
+// so they stress the deepest shared parts of the two engines.
+func TestEnginesAgreeOnModules(t *testing.T) {
+	dir := t.TempDir()
+	writeTestModule(t, dir, "lib/numbers.spr", "export fn square(x) { return x * x }\nexport fn cube(x) { return x * x * x }\nexport const answer = 42\n")
+	writeTestModule(t, dir, "lib/strings.spr", "export fn shout(s) { return upper(s) + \"!\" }\n")
+	writeTestModule(t, dir, "lib/bank.spr", "let balance = 0\nexport fn deposit(amount) { balance = balance + amount }\nexport fn total() { return balance }\n")
+
+	mainSrc := `
+import "lib/numbers"
+import "lib/strings" as text
+import "lib/bank"
+print(numbers["square"](7))
+print(numbers["cube"](3))
+print(numbers["answer"])
+print(text["shout"]("hi"))
+bank["deposit"](10)
+bank["deposit"](5)
+print(bank["total"]())
+print(bank["hidden"])
+print(type(bank))
+`
+	mainPath := filepath.Join(dir, "main.spr")
+	writeTestModule(t, dir, "main.spr", mainSrc)
+
+	interpOut, interpErr := runInterpFile(mainPath)
+	vmOut, vmErr := runVMFile(mainPath)
+	if interpErr != nil {
+		t.Errorf("interpreter error: %v", interpErr)
+	}
+	if vmErr != nil {
+		t.Errorf("vm error: %v", vmErr)
+	}
+	if interpOut != vmOut {
+		t.Errorf("engines differ for modules:\ninterp: %q\n    vm: %q", interpOut, vmOut)
+	}
+}
+
+// TestEnginesAgreeOnModuleErrors checks that both engines report the same
+// message when an import fails.
+func TestEnginesAgreeOnModuleErrors(t *testing.T) {
+	dir := t.TempDir()
+	writeTestModule(t, dir, "a.spr", `import "b"`)
+	writeTestModule(t, dir, "b.spr", `import "a"`)
+	mainPath := filepath.Join(dir, "main.spr")
+	writeTestModule(t, dir, "main.spr", `import "a"`)
+
+	_, interpErr := runInterpFile(mainPath)
+	_, vmErr := runVMFile(mainPath)
+	if interpErr == nil || vmErr == nil {
+		t.Fatalf("expected both engines to fail, interp: %v vm: %v", interpErr, vmErr)
+	}
+	if interpErr.Error() != vmErr.Error() {
+		t.Errorf("error messages differ:\ninterp: %q\n    vm: %q", interpErr.Error(), vmErr.Error())
 	}
 }

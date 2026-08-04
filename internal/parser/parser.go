@@ -104,6 +104,10 @@ func (p *Parser) parseStatement() ast.Stmt {
 		if p.peek(1).Kind == token.IDENT {
 			return p.parseFnDecl()
 		}
+	case token.IMPORT:
+		return p.parseImport()
+	case token.EXPORT:
+		return p.parseExport()
 	case token.IF:
 		return p.parseIf()
 	case token.WHILE:
@@ -175,6 +179,90 @@ func (p *Parser) parseFnDecl() ast.Stmt {
 		return nil
 	}
 	return &ast.FnStmt{FnPos: fnTok.Pos, Name: name, Params: params, Body: body}
+}
+
+// parseImport parses "import <path> [as <name>]".
+//
+// Without an "as" clause the name comes from the path's base, with any
+// ".spr" extension removed.
+func (p *Parser) parseImport() ast.Stmt {
+	kw := p.next() // import
+	if !p.at(token.STRING) {
+		p.errorf(p.cur().Pos, "expected a module path after 'import', found %s", tokenString(p.cur()))
+		p.recoverStatement()
+		return nil
+	}
+	path := p.cur().Value
+	p.next()
+
+	alias := moduleBaseName(path)
+	if p.at(token.AS) {
+		p.next()
+		id := p.expectIdent("a name after 'as'")
+		if id == nil {
+			return nil
+		}
+		alias = id.Name
+	} else if !isValidIdentifier(alias) {
+		p.errorf(kw.Pos, "module name '%s' is not a valid identifier; use 'import %q as <name>'", alias, path)
+		p.recoverStatement()
+		return nil
+	}
+	return &ast.ImportStmt{ImportPos: kw.Pos, Path: path, Alias: alias}
+}
+
+// parseExport parses "export" followed by a top-level declaration.
+func (p *Parser) parseExport() ast.Stmt {
+	kw := p.next() // export
+	var decl ast.Stmt
+	switch p.cur().Kind {
+	case token.LET:
+		decl = p.parseLet(false)
+	case token.CONST:
+		decl = p.parseLet(true)
+	case token.FN:
+		decl = p.parseFnDecl()
+	default:
+		p.errorf(p.cur().Pos, "expected 'let', 'const', or 'fn' after 'export', found %s", tokenString(p.cur()))
+		p.recoverStatement()
+		return nil
+	}
+	if decl == nil {
+		return nil
+	}
+	return &ast.ExportStmt{ExportPos: kw.Pos, Decl: decl}
+}
+
+// moduleBaseName derives a module name from a path.
+//
+// It takes the last path segment and strips any ".spr" extension. The name
+// still needs to be a valid identifier before it can bind.
+func moduleBaseName(path string) string {
+	base := path
+	if i := strings.LastIndexAny(base, `/\`); i >= 0 {
+		base = base[i+1:]
+	}
+	return strings.TrimSuffix(base, ".spr")
+}
+
+// isValidIdentifier reports whether name is a valid Sprout identifier.
+func isValidIdentifier(name string) bool {
+	if name == "" {
+		return false
+	}
+	for i, r := range name {
+		if i == 0 && r != '_' && !isLetter(r) {
+			return false
+		}
+		if i > 0 && r != '_' && !isLetter(r) && (r < '0' || r > '9') {
+			return false
+		}
+	}
+	return true
+}
+
+func isLetter(r rune) bool {
+	return (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z')
 }
 
 func (p *Parser) parseIf() ast.Stmt {

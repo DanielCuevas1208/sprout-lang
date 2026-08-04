@@ -3,6 +3,7 @@
 Sprout is a small programming language that runs on Go.
 It ships with a lexer, a Pratt parser, and two execution engines.
 Version 0.2 adds a stack-based bytecode virtual machine.
+Version 0.3 adds a module system for splitting programs across files.
 The interpreter and the VM share one runtime and one standard library.
 Sprout produces friendly diagnostics that point at the exact problem.
 
@@ -16,6 +17,7 @@ The codebase is structured to grow cleanly over time.
 - A bytecode compiler and a stack-based virtual machine.
 - A tree-walking interpreter that shares the runtime with the VM.
 - A disassembler for the compiled instruction stream.
+- A module system with imports, exports, and cycle detection.
 - Source diagnostics with a gutter, line, and caret.
 - A small standard library for real example programs.
 - A REPL for interactive experiments.
@@ -82,7 +84,7 @@ Run the tour in `docs/tour.md` for a full walkthrough.
 | `sprout repl` | Starts a session. |
 | `sprout lex file.spr` | Shows the tokens. |
 | `sprout parse file.spr` | Shows the syntax tree. |
-| `sprout check file.spr` | Checks without running. |
+| `sprout check file.spr` | Checks the file and its imports without running. |
 | `sprout version` | Shows the version. |
 
 Pass a file path with no command to run it.
@@ -148,7 +150,6 @@ Version 0.2 adds a compiler and a stack-based virtual machine.
 The compiler turns a syntax tree into bytecode.
 The VM executes that bytecode with an operand stack and call frames.
 Both engines share the runtime, so they behave identically.
-
 The `dis` command shows the compiled instructions.
 
 ```text
@@ -168,6 +169,41 @@ Slots:  1
 Each line shows the offset, the opcode, and the source position.
 The engine parity tests prove the VM matches the interpreter.
 See `docs/bytecode.md` for the full reference.
+
+## Modules
+
+Version 0.3 adds a module system.
+Split a program across files with `import` and `export`.
+A module runs once, in its own scope.
+Only exported names are visible to importers.
+
+Save a library module.
+
+```sprout
+// lib/mathx.spr
+export fn double(x) {
+    return x * 2
+}
+```
+
+Use it from a program.
+
+```sprout
+import "lib/mathx"
+
+print(mathx["double"](21))    // 42
+```
+
+The bound name comes from the file name.
+Use `as` to choose a different name.
+Paths resolve against the importing file directory.
+Circular imports are an error.
+The loader caches each module, so it runs once per program.
+
+The `check` command validates the whole import graph.
+The VM compiles imports into `IMPORT` instructions.
+Run `examples/modules.spr` to see a working library.
+See `docs/modules.md` for the full reference.
 
 ## Standard library
 
@@ -197,6 +233,7 @@ The `examples` directory holds documented programs.
 - `math.spr` shows numbers and rounding.
 - `higher_order.spr` uses map, filter, and fold.
 - `guess.spr` is an interactive game.
+- `modules.spr` imports the library in `examples/lib`.
 
 Each example has a golden output in `test/golden`.
 Both engines must match the goldens.
@@ -213,6 +250,7 @@ internal/lexer   the scanner
 internal/ast     the syntax tree
 internal/parser  the Pratt parser
 internal/checker static analysis
+internal/module  module loading, caching, and cycles
 internal/runtime value semantics and the standard library
 internal/interp  the tree-walking interpreter
 internal/code    opcodes and the instruction stream
@@ -225,6 +263,7 @@ internal/repl    the interactive session
 Each stage is independent.
 The parser feeds the checker and the compiler.
 The runtime is the single source of truth for both engines.
+The module loader runs on either engine.
 Adding a feature means updating the runtime, then both engines stay in step.
 
 ## Development
@@ -262,6 +301,7 @@ All tests pass on Go 1.22 and newer.
 | `internal/lexer` | Tokens, positions, and lexer errors. |
 | `internal/parser` | Precedence, statements, and recovery. |
 | `internal/checker` | Scope and static errors. |
+| `internal/module` | Path resolution, caching, and cycles. |
 | `internal/runtime` | Arithmetic, comparison, and indexing. |
 | `internal/interp` | Evaluation, closures, and runtime errors. |
 | `internal/code` | Opcodes, the builder, and disassembly. |
@@ -280,6 +320,9 @@ Version 0.2 is complete. It adds the bytecode virtual machine.
 It keeps the same parser and checker.
 
 Version 0.3 adds a module system and a build tool.
+The module system is complete. Imports, exports, and cycle detection ship
+in this release. The build tool remains.
+
 Version 0.4 adds structs, methods, and interfaces.
 Version 0.5 adds result types and pattern matching.
 Version 0.6 adds concurrency with channels.
@@ -294,6 +337,8 @@ Version 0.6 adds concurrency with channels.
 - The standard library is small by design.
 - The VM materializes a loop iterable before the loop starts.
 - `break` and `continue` inside a closure are not supported.
+- Module values are read-only. There is no package index yet.
+- Import errors point at the import statement, not inside the module.
 
 ## License
 

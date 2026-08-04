@@ -10,9 +10,11 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 
 	"github.com/sprout-lang/sprout/internal/ast"
 	"github.com/sprout-lang/sprout/internal/diag"
+	"github.com/sprout-lang/sprout/internal/module"
 	"github.com/sprout-lang/sprout/internal/object"
 	"github.com/sprout-lang/sprout/internal/runtime"
 	"github.com/sprout-lang/sprout/internal/source"
@@ -25,6 +27,8 @@ type Interpreter struct {
 	file    *source.File
 	ctx     runtime.Context
 	frames  []diag.Frame
+	// loader resolves import statements to module values.
+	loader *module.Loader
 }
 
 // New returns an interpreter wired to the process standard streams.
@@ -43,6 +47,7 @@ func NewWithIO(stdin io.Reader, stdout, stderr io.Writer) *Interpreter {
 			return iv.call(fn, args, pos)
 		},
 	}
+	iv.loader = module.New(iv)
 	RegisterBuiltins(iv)
 	return iv
 }
@@ -167,6 +172,17 @@ func (iv *Interpreter) evalStmt(s ast.Stmt, env *Env) object.Object {
 		}
 		env.Define(n.Name.Name, value, n.IsConst)
 		return object.NilValue
+
+	case *ast.ImportStmt:
+		mod, err := iv.loadModule(n)
+		if err != nil {
+			iv.raise(err.Error(), n.ImportPos)
+		}
+		env.Define(n.Alias, mod, true)
+		return object.NilValue
+
+	case *ast.ExportStmt:
+		return iv.evalStmt(n.Decl, env)
 
 	case *ast.FnStmt:
 		fn := &Function{Name: n.Name.Name, Params: n.Params, Body: n.Body, Env: env}
@@ -468,6 +484,22 @@ func (iv *Interpreter) call(callee object.Object, args []object.Object, pos sour
 	}
 	iv.raise(fmt.Sprintf("cannot call a %s", callee.Type()), pos)
 	return nil
+}
+
+// loadModule loads the module named by n and wraps it as a value.
+func (iv *Interpreter) loadModule(n *ast.ImportStmt) (*object.Module, error) {
+	if iv.loader == nil {
+		return nil, fmtErr("imports are not available in this session")
+	}
+	return iv.loader.Load(n.Path, dirOf(iv.file))
+}
+
+// dirOf returns the directory that holds file, or the current directory.
+func dirOf(file *source.File) string {
+	if file == nil {
+		return ""
+	}
+	return filepath.Dir(file.Name)
 }
 
 func (iv *Interpreter) pushFrame(name string, pos source.Pos) {

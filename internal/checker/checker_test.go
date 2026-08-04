@@ -99,3 +99,19 @@ func TestClosureCapture(t *testing.T) {
 	expectClean(t, "let count = 0\nfn bump() { count = count + 1 }\nbump()")
 	expectError(t, "fn outer() { fn inner() { return secret } }", "undefined name 'secret'")
 }
+
+func TestModules(t *testing.T) {
+	expectClean(t, `import "lib/math"
+print(math["square"](2))`)
+	expectClean(t, `import "lib/math" as m
+print(m["square"](2))`)
+	expectClean(t, `import "lib/math"
+let x = math["square"](math["square"](2))`)
+	expectClean(t, "export let x = 1\nexport const y = 2\nexport fn f() { return x }")
+
+	expectError(t, `import "lib/math"
+let math = 3`, "duplicate declaration of 'math'")
+	expectError(t, "fn f() {\n\timport \"x\"\n}", "'import' can only appear at the top level")
+	expectError(t, "if true {\n\texport let x = 1\n}", "'export' can only appear at the top level")
+	expectError(t, "let x = 1\nx = math[\"a\"]", "undefined name 'math'")
+}

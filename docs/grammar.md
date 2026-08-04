@@ -1,6 +1,6 @@
 # Sprout Grammar
 
-This document is the formal grammar of Sprout version 0.2.
+This document is the formal grammar of Sprout version 0.3.
 
 ## Notation
 
@@ -35,6 +35,10 @@ identifier    := letter {letter | digit | "_"}
 Numbers do not start or end with an underscore.
 A floating-point literal needs a digit before the decimal point.
 
+The keywords are `let`, `const`, `fn`, `if`, `elif`, `else`, `while`,
+`for`, `in`, `return`, `break`, `continue`, `true`, `false`, `nil`,
+`and`, `or`, `not`, `import`, `export`, and `as`.
+
 ## Program structure
 
 ```
@@ -42,6 +46,7 @@ program       := statement*
 statement     := let_decl | const_decl | fn_decl
                | if_stmt | while_stmt | for_stmt
                | return_stmt | break_stmt | continue_stmt
+               | import_stmt | export_stmt
                | expr_stmt
 ```
 
@@ -61,6 +66,18 @@ The `fn` keyword also creates an anonymous function as an expression.
 ```
 fn_expr       := "fn" "(" params ")" block
 ```
+
+## Modules
+
+```
+import_stmt   := "import" string ["as" identifier]
+export_stmt   := "export" (let_decl | const_decl | fn_decl)
+```
+
+An import binds a module value to a name.
+The name comes from the `as` clause or from the path base.
+Imports and exports only appear at the top level of a file.
+See `docs/modules.md` for the full module reference.
 
 ## Control flow
 
