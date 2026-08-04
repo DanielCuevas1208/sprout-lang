@@ -250,6 +250,38 @@ func (vm *VM) callValue(callee object.Object, args []object.Object, pos source.P
 		})
 		return vm.runFrames(before)
 
+	case *object.BoundMethod:
+		cl, ok := c.Method.(*Closure)
+		if !ok {
+			vm.failAtPos("cannot call this method value", pos)
+		}
+		if len(args) != len(cl.fn.ParamNames)-1 {
+			vm.failAtPos(fmt.Sprintf("method '%s' expects %d arguments, got %d",
+				c.Name, len(cl.fn.ParamNames)-1, len(args)), pos)
+		}
+		env := &Env{parent: cl.env, slots: make([]object.Object, cl.fn.NumSlots)}
+		env.slots[0] = c.Receiver
+		for i, a := range args {
+			env.slots[i+1] = a
+		}
+		before := len(vm.frames)
+		vm.frames = append(vm.frames, &frame{
+			cl:      cl,
+			fn:      cl.fn,
+			env:     env,
+			ip:      0,
+			base:    len(vm.stack),
+			callPos: pos,
+		})
+		return vm.runFrames(before)
+
+	case *object.StructType:
+		s, err := c.Construct(args)
+		if err != nil {
+			vm.failAtPos(err.Error(), pos)
+		}
+		return s
+
 	case *runtime.Builtin:
 		if err := c.CheckArgs(args, c.Name); err != nil {
 			vm.failAtPos(err.Error(), pos)
@@ -388,6 +420,65 @@ func (vm *VM) runFrames(until int) object.Object {
 			}
 			vm.push(&object.Module{Name: name, Exports: exports})
 			fr.ip += 3
+		case code.OpMakeStruct:
+			name := fn.Consts[code.U16(fn.Code, fr.ip+1)].(object.Str).Value
+			count := int(code.U16(fn.Code, fr.ip+3))
+			fields := make([]string, count)
+			for i := count - 1; i >= 0; i-- {
+				s := vm.pop().(object.Str)
+				fields[i] = s.Value
+			}
+			vm.push(&object.StructType{Name: name, Fields: fields, Methods: make(map[string]object.Object)})
+			fr.ip += 5
+		case code.OpAddMethod:
+			pos := fr.pos()
+			name := fn.Consts[code.U16(fn.Code, fr.ip+1)].(object.Str).Value
+			method := vm.pop()
+			st := vm.pop().(*object.StructType)
+			if st.HasField(name) {
+				vm.failAtPos(fmt.Sprintf("method '%s' conflicts with a field of struct '%s'", name, st.Name), pos)
+			}
+			// Re-registration overrides the previous method.
+			st.Methods[name] = method
+			fr.ip += 3
+		case code.OpGetMember:
+			pos := fr.pos()
+			fr.ip++
+			name := fn.Consts[code.U16(fn.Code, fr.ip)].(object.Str).Value
+			fr.ip += 2
+			v, err := runtime.GetMember(vm.pop(), name)
+			if err != nil {
+				vm.failAtPos(err.Error(), pos)
+			}
+			vm.push(v)
+		case code.OpSetMember:
+			pos := fr.pos()
+			fr.ip++
+			name := fn.Consts[code.U16(fn.Code, fr.ip)].(object.Str).Value
+			fr.ip += 2
+			value := vm.pop()
+			container := vm.pop()
+			v, err := runtime.SetMember(container, name, value)
+			if err != nil {
+				vm.failAtPos(err.Error(), pos)
+			}
+			vm.push(v)
+		case code.OpBuildStruct:
+			pos := fr.pos()
+			count := int(code.U16(fn.Code, fr.ip+1))
+			fr.ip += 3
+			names := make([]string, count)
+			values := make([]object.Object, count)
+			for i := count - 1; i >= 0; i-- {
+				values[i] = vm.pop()
+				names[i] = vm.pop().(object.Str).Value
+			}
+			st := vm.pop().(*object.StructType)
+			s, err := st.ConstructNamed(names, values)
+			if err != nil {
+				vm.failAtPos(err.Error(), pos)
+			}
+			vm.push(s)
 		case code.OpSetIndex:
 			pos := fr.pos()
 			fr.ip++

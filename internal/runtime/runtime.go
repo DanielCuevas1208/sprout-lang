@@ -457,6 +457,52 @@ func IndexGet(container, idx object.Object) (object.Object, error) {
 	return nil, FmtErr("cannot index a %s", container.Type())
 }
 
+// GetMember reads a named member of a struct or a module.
+//
+// A field returns its value. A method returns a bound method value. A
+// module member returns the exported value. Any other value is an error.
+func GetMember(x object.Object, name string) (object.Object, error) {
+	switch v := x.(type) {
+	case *object.Struct:
+		if field, ok := v.Values[name]; ok {
+			return field, nil
+		}
+		if method, ok := v.StructType.Methods[name]; ok {
+			return &object.BoundMethod{Name: name, Receiver: v, Method: method}, nil
+		}
+		// A declared but unset field holds nil.
+		if v.StructType.HasField(name) {
+			return object.NilValue, nil
+		}
+		return nil, FmtErr("type '%s' has no field or method '%s'", v.StructType.Name, name)
+	case *object.Module:
+		if exported, ok := v.Exports[name]; ok {
+			return exported, nil
+		}
+		return nil, FmtErr("module '%s' has no exported member '%s'", v.Name, name)
+	}
+	return nil, FmtErr("cannot access a member of a %s", x.Type())
+}
+
+// SetMember stores value into a field of a struct and returns value.
+//
+// A missing field and a method name are both errors. Modules are read-only
+// to importers.
+func SetMember(x object.Object, name string, value object.Object) (object.Object, error) {
+	s, ok := x.(*object.Struct)
+	if !ok {
+		return nil, FmtErr("cannot assign to a member of a %s", x.Type())
+	}
+	if !s.StructType.HasField(name) {
+		return nil, FmtErr("type '%s' has no field '%s'", s.StructType.Name, name)
+	}
+	if s.StructType.HasMethod(name) {
+		return nil, FmtErr("cannot assign to method '%s' of type '%s'", name, s.StructType.Name)
+	}
+	s.Values[name] = value
+	return value, nil
+}
+
 // SetIndex stores value into a container and returns value.
 func SetIndex(container, idx, value object.Object) (object.Object, error) {
 	switch c := container.(type) {

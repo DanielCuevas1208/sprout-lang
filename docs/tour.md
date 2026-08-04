@@ -25,6 +25,9 @@ Sprout has nine value types.
 - `map` holds keys and values. Keys are strings.
 - `function` is a callable value.
 - `range` is a sequence of integers.
+- `struct` is an instance of a struct type.
+- `struct type` is a struct declaration.
+- `method` is a method with a bound receiver.
 
 Use the `type` function to ask for the type of a value.
 
@@ -204,6 +207,59 @@ print(filter(nums, fn(x) { return x % 2 == 0 }))
 print(fold(nums, 0, fn(acc, x) { return acc + x }))
 ```
 
+## Structs and methods
+
+A struct groups related values into one value.
+Declare it with the `struct` keyword.
+
+```sprout
+struct Point {
+    x
+    y
+}
+
+let origin = Point(0, 0)
+let labeled = Point(x: 1, y: 2)
+print(origin)          // Point{x: 0, y: 0}
+print(labeled.y)       // 2
+```
+
+A method belongs to a struct type.
+The method body reads the receiver through `self`.
+
+```sprout
+fn Point.sum() {
+    return self.x + self.y
+}
+
+print(labeled.sum())   // 3
+```
+
+## Interfaces
+
+An interface lists the methods a struct must provide.
+A struct satisfies it when it declares every method.
+
+```sprout
+interface Shape {
+    area()
+}
+
+struct Square { side }
+
+fn Square.area() {
+    return self.side * self.side
+}
+
+fn report(s: Shape) {
+    return "area " + str(s.area())
+}
+
+print(report(Square(side: 3)))   // area 9
+```
+
+Read `docs/structs.md` for the full reference.
+
 ## Assertions
 
 The `assert` function checks a condition. It stops the program when the
@@ -265,6 +321,7 @@ sprout> :quit
 
 Sprout 0.2 added a stack-based bytecode virtual machine.
 Sprout 0.3 runs modules on both engines.
+Sprout 0.4 runs structs and methods on both engines.
 It shares the parser, the checker, and the standard library with the
 interpreter. The two engines produce the same results.
 
@@ -285,6 +342,7 @@ Read `docs/bytecode.md` for the full VM reference.
 ## Next steps
 
 Read the standard library reference in `docs/stdlib.md`.
+Read the structs and interfaces reference in `docs/structs.md`.
 Read the formal grammar in `docs/grammar.md`.
 Read the bytecode virtual machine in `docs/bytecode.md`.
 Read the module system in `docs/modules.md`.

@@ -175,6 +175,47 @@ func TestStatements(t *testing.T) {
 			"print(util.x)",
 			"(program (call print (member util .x)))",
 		},
+		{
+			"struct Point { x y }",
+			"(program (struct Point x y))",
+		},
+		{
+			"struct Point { x, y }",
+			"(program (struct Point x y))",
+		},
+		{
+			"export struct Point { x }",
+			"(program (export struct Point x))",
+		},
+		{
+			"interface Shape { area() scale(f) }",
+			"(program (interface Shape area:0 scale:1))",
+		},
+		{
+			"fn Point.sum() { return self.x }",
+			"(program (method Point.sum (params) (block (return value (member self .x)))))",
+		},
+		{
+			"let p = Point(1, 2)",
+			"(program (let p value (call Point (int 1) (int 2))))",
+		},
+		{
+			"let p = Point(x: 1, y: 2)",
+			"(program (let p value (call Point (named x (int 1)) (named y (int 2)))))",
+		},
+	}
+	for _, c := range cases {
+		expectParse(t, c.src, c.want)
+	}
+}
+
+func TestParseMethodReceiver(t *testing.T) {
+	cases := []struct {
+		src  string
+		want string
+	}{
+		{"fn Point.move(dx, dy) { self.x = self.x + dx }",
+			"(program (method Point.move (params dx dy) (block (assign (member self .x) (binary + (member self .x) dx)))))"},
 	}
 	for _, c := range cases {
 		expectParse(t, c.src, c.want)
@@ -205,6 +246,13 @@ func TestParseErrors(t *testing.T) {
 		{"}", "unexpected '}'"},
 		{"for i range(0, 3) { }", "expected 'in'"},
 		{"let x = 1 )", "expected a statement"},
+		{"struct { x }", "expected a name after"},
+		{"struct Point x }", "expected '{'"},
+		{"fn Point.x y { }", "expected '('"},
+		{"fn Point.() { }", "expected a method name"},
+		{"export interface Shape { area() }", "interfaces cannot be exported"},
+		{"f(a: 1, b)", "cannot mix positional and named arguments"},
+		{"f(a, b: 2)", "cannot mix positional and named arguments"},
 	}
 	for _, c := range cases {
 		expectErrors(t, c.src, c.want)

@@ -217,18 +217,36 @@ func readFile(path, spec string, isModule bool) (*File, []diag.Diagnostic) {
 }
 
 // collectExports records the exported names of a file's top level.
+//
+// A name is recorded once. Exporting a method also exports its struct type,
+// so a struct and a method on it both export the same name.
 func collectExports(f *File) {
+	add := func(name string, pos source.Pos) {
+		if _, done := f.Exports[name]; done {
+			return
+		}
+		f.Exports[name] = pos
+		f.ExportNames = append(f.ExportNames, name)
+	}
 	for _, stmt := range f.Prog.Stmts {
 		switch n := stmt.(type) {
 		case *ast.LetStmt:
 			if n.Export {
-				f.Exports[n.Name.Name] = n.Name.Position
-				f.ExportNames = append(f.ExportNames, n.Name.Name)
+				add(n.Name.Name, n.Name.Position)
+			}
+		case *ast.StructStmt:
+			if n.Export {
+				add(n.Name.Name, n.Name.Position)
 			}
 		case *ast.FnStmt:
+			if n.Export && n.Receiver != nil {
+				// A method rides on its struct type. Exporting it also
+				// exports the type so importers can reach the method.
+				add(n.Receiver.Name, n.Receiver.Position)
+				continue
+			}
 			if n.Export {
-				f.Exports[n.Name.Name] = n.Name.Position
-				f.ExportNames = append(f.ExportNames, n.Name.Name)
+				add(n.Name.Name, n.Name.Position)
 			}
 		}
 	}

@@ -68,6 +68,19 @@ export fn f() {
 	}
 }
 
+func TestSourceRoundTripStructs(t *testing.T) {
+	cases := []string{
+		"struct Point {\n    x\n    y\n}\nlet p = Point(1, 2)\nprint(p.x)",
+		"struct Point {\n    x\n    y\n}\nlet p = Point(x: 1, y: 2)\nprint(p.y)",
+		"struct Point {\n    x\n}\nfn Point.sum() {\n    return self.x\n}\nprint(Point(1).sum())",
+		"interface Shape {\n    area()\n}\nstruct Circle {\n    radius\n}\nfn Circle.area() {\n    return 1.0\n}\nlet s: Shape = Circle(radius: 1)\nprint(s.area())",
+		"export struct Point {\n    x\n}\nexport fn Point.sum() {\n    return self.x\n}",
+	}
+	for _, src := range cases {
+		roundTrip(t, src)
+	}
+}
+
 func TestSourceBodyDropsImportsAndExports(t *testing.T) {
 	src := `import "util"
 export let x = 1

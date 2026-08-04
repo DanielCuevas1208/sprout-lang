@@ -206,11 +206,31 @@ func (iv *Interpreter) evalStmt(s ast.Stmt, env *Env) object.Object {
 		return object.NilValue
 
 	case *ast.FnStmt:
+		if n.Receiver != nil {
+			return iv.evalMethod(n, env)
+		}
 		fn := &Function{Name: n.Name.Name, Params: n.Params, Body: n.Body, Env: env}
 		env.Define(n.Name.Name, fn, true)
 		if n.Export && iv.moduleExports != nil {
 			iv.moduleExports[n.Name.Name] = fn
 		}
+		return object.NilValue
+
+	case *ast.StructStmt:
+		st := &object.StructType{
+			Name:    n.Name.Name,
+			Fields:  fieldNames(n.Fields),
+			Methods: make(map[string]object.Object),
+		}
+		env.Define(n.Name.Name, st, true)
+		if n.Export && iv.moduleExports != nil {
+			iv.moduleExports[n.Name.Name] = st
+		}
+		return object.NilValue
+
+	case *ast.InterfaceStmt:
+		// Interfaces are a static contract; they carry no runtime value.
+		env.Define(n.Name.Name, object.NilValue, true)
 		return object.NilValue
 
 	case *ast.ExprStmt:
@@ -270,6 +290,42 @@ func (iv *Interpreter) evalStmt(s ast.Stmt, env *Env) object.Object {
 	}
 	iv.raise("unsupported statement", s.Pos())
 	return nil
+}
+
+// evalMethod registers a method on its struct type.
+//
+// The method captures the environment where it was declared, so a method
+// body can close over module names and imported bindings. The receiver type
+// must already be bound in env.
+func (iv *Interpreter) evalMethod(n *ast.FnStmt, env *Env) object.Object {
+	v, err := env.Get(n.Receiver.Name)
+	if err != nil {
+		iv.raise(fmt.Sprintf("unknown struct type '%s'", n.Receiver.Name), n.Receiver.Position)
+	}
+	st, ok := v.(*object.StructType)
+	if !ok {
+		iv.raise(fmt.Sprintf("cannot add a method to a %s", v.Type()), n.Receiver.Position)
+	}
+	if st.HasField(n.Name.Name) {
+		iv.raise(fmt.Sprintf("method '%s' conflicts with a field of struct '%s'", n.Name.Name, n.Receiver.Name), n.Name.Position)
+	}
+	fn := &Function{Name: n.Receiver.Name + "." + n.Name.Name, Params: n.Params, Body: n.Body, Env: env}
+	// Re-registration overrides the previous method, so a declaration that
+	// runs more than once stays valid.
+	st.Methods[n.Name.Name] = fn
+	if n.Export && iv.moduleExports != nil {
+		iv.moduleExports[n.Receiver.Name] = st
+	}
+	return object.NilValue
+}
+
+// fieldNames returns the declared field names of a struct body.
+func fieldNames(fields []*ast.Ident) []string {
+	names := make([]string, len(fields))
+	for i, f := range fields {
+		names[i] = f.Name
+	}
+	return names
 }
 
 // runLoopBody executes a loop body, turning break and continue signals into
@@ -338,6 +394,9 @@ func (iv *Interpreter) evalExpr(e ast.Expr, env *Env) object.Object {
 
 	case *ast.CallExpr:
 		callee := iv.evalExpr(n.Callee, env)
+		if len(n.Named) > 0 {
+			return iv.constructStruct(callee, n, env)
+		}
 		args := make([]object.Object, len(n.Args))
 		for i, a := range n.Args {
 			args[i] = iv.evalExpr(a, env)
@@ -355,13 +414,9 @@ func (iv *Interpreter) evalExpr(e ast.Expr, env *Env) object.Object {
 
 	case *ast.MemberExpr:
 		x := iv.evalExpr(n.X, env)
-		m, ok := x.(*object.Module)
-		if !ok {
-			iv.raise(fmt.Sprintf("cannot access a member of a %s", x.Type()), n.DotPos)
-		}
-		v, exists := m.Exports[n.Name.Name]
-		if !exists {
-			iv.raise(fmt.Sprintf("module '%s' has no exported member '%s'", m.Name, n.Name.Name), n.Name.Position)
+		v, err := runtime.GetMember(x, n.Name.Name)
+		if err != nil {
+			iv.raise(err.Error(), n.DotPos)
 		}
 		return v
 
@@ -479,34 +534,57 @@ func (iv *Interpreter) evalAssign(n *ast.AssignExpr, env *Env) object.Object {
 			iv.raise(err.Error(), n.OpPos)
 		}
 		return v
+
+	case *ast.MemberExpr:
+		container := iv.evalExpr(t.X, env)
+		v, err := runtime.SetMember(container, t.Name.Name, value)
+		if err != nil {
+			iv.raise(err.Error(), n.OpPos)
+		}
+		return v
 	}
 	iv.raise("invalid assignment target", n.OpPos)
 	return nil
+}
+
+// constructStruct builds a struct instance from named arguments.
+func (iv *Interpreter) constructStruct(callee object.Object, n *ast.CallExpr, env *Env) object.Object {
+	st, ok := callee.(*object.StructType)
+	if !ok {
+		iv.raise(fmt.Sprintf("cannot call a %s with named arguments", callee.Type()), n.Pos())
+	}
+	names := make([]string, len(n.Named))
+	values := make([]object.Object, len(n.Named))
+	for i, na := range n.Named {
+		names[i] = na.Name.Name
+		values[i] = iv.evalExpr(na.Value, env)
+	}
+	s, err := st.ConstructNamed(names, values)
+	if err != nil {
+		iv.raise(err.Error(), n.Pos())
+	}
+	return s
 }
 
 // call invokes a function or builtin with the given arguments.
 func (iv *Interpreter) call(callee object.Object, args []object.Object, pos source.Pos) (val object.Object) {
 	switch fn := callee.(type) {
 	case *Function:
-		if len(args) != len(fn.Params) {
-			iv.raise(fmt.Sprintf("function '%s' expects %d arguments, got %d", fn.Name, len(fn.Params), len(args)), pos)
+		return iv.callFunction(fn, args, nil, pos)
+
+	case *object.BoundMethod:
+		f, ok := fn.Method.(*Function)
+		if !ok {
+			iv.raise(fmt.Sprintf("cannot call this method value"), pos)
 		}
-		callEnv := NewEnv(fn.Env)
-		for i, param := range fn.Params {
-			callEnv.Define(param.Name.Name, args[i], false)
+		return iv.callFunction(f, args, fn.Receiver, pos)
+
+	case *object.StructType:
+		s, err := fn.Construct(args)
+		if err != nil {
+			iv.raise(err.Error(), pos)
 		}
-		iv.pushFrame(fn.Name, pos)
-		defer iv.popFrame()
-		defer func() {
-			if r := recover(); r != nil {
-				if rs, ok := r.(*returnSignal); ok {
-					val = rs.value
-					return
-				}
-				panic(r)
-			}
-		}()
-		return iv.evalBlock(fn.Body, callEnv)
+		return s
 
 	case *runtime.Builtin:
 		if err := fn.CheckArgs(args, fn.Name); err != nil {
@@ -520,6 +598,35 @@ func (iv *Interpreter) call(callee object.Object, args []object.Object, pos sour
 	}
 	iv.raise(fmt.Sprintf("cannot call a %s", callee.Type()), pos)
 	return nil
+}
+
+// callFunction runs a user function, optionally with a bound receiver.
+//
+// A method passes its receiver as the implicit self parameter. Without a
+// receiver the function behaves like a plain call.
+func (iv *Interpreter) callFunction(fn *Function, args []object.Object, receiver object.Object, pos source.Pos) (val object.Object) {
+	if len(args) != len(fn.Params) {
+		iv.raise(fmt.Sprintf("function '%s' expects %d arguments, got %d", fn.Name, len(fn.Params), len(args)), pos)
+	}
+	callEnv := NewEnv(fn.Env)
+	if receiver != nil {
+		callEnv.Define("self", receiver, false)
+	}
+	for i, param := range fn.Params {
+		callEnv.Define(param.Name.Name, args[i], false)
+	}
+	iv.pushFrame(fn.Name, pos)
+	defer iv.popFrame()
+	defer func() {
+		if r := recover(); r != nil {
+			if rs, ok := r.(*returnSignal); ok {
+				val = rs.value
+				return
+			}
+			panic(r)
+		}
+	}()
+	return iv.evalBlock(fn.Body, callEnv)
 }
 
 // currentFileName returns the name of the file being evaluated.

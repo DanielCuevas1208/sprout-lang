@@ -103,6 +103,11 @@ This matches the interpreter, so closures see their own copy.
 | MAKE_MODULE | name | Build a module from a map and a name. |
 | MAKE_ITER | none | Pop an iterable, push an iterator. |
 | ITER_NEXT | target | Advance, jump when done. |
+| MAKE_STRUCT | name, fields | Build a struct type from field names. |
+| ADD_METHOD | name | Register a method on a struct type. |
+| GET_MEMBER | name | Push a field, method, or module member. |
+| SET_MEMBER | name | Store a value in a struct field. |
+| BUILD_STRUCT | count | Build a struct from named values. |
 | NEG | none | Negate the top. |
 | NOT | none | Invert the truthiness. |
 | ADD | none | Add the top two values. |
@@ -131,8 +136,33 @@ A module that imports itself is an import cycle and fails.
 0003  SET_LOCAL  ; main.spr:1:19  0
 ```
 
-A member read compiles to `GET_INDEX` on the module value.
+A member read compiles to `GET_MEMBER` with the member name.
+A struct field read and a module export read use the same instruction.
 The `dis` command lists every module below the main function.
+
+## Structs
+
+A struct declaration compiles to `MAKE_STRUCT`.
+The field names are pushed first, then the instruction builds the type.
+A method declaration compiles to `CLOSURE` and `ADD_METHOD`.
+The method reserves slot zero for the `self` receiver.
+
+A struct literal with positional values is a normal call.
+The VM constructs the instance when it calls the type value.
+A named struct literal compiles to `BUILD_STRUCT`.
+
+```text
+0000  PUSH_CONST  ; test.spr:2:8  0  (x)
+0003  PUSH_CONST  ; test.spr:2:8  1  (y)
+0006  MAKE_STRUCT  ; test.spr:2:1  2  (Point) fields 2
+0011  SET_LOCAL  ; test.spr:2:8  1
+0014  GET_LOCAL  ; test.spr:6:4  1
+0017  CLOSURE  ; test.spr:6:1  4  (Point.sum)
+0020  ADD_METHOD  ; test.spr:6:10  3  (sum)
+```
+
+A method call reads the method with `GET_MEMBER`.
+The VM binds the receiver when it calls the method value.
 
 ## Short-circuiting
 

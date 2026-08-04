@@ -21,6 +21,9 @@ const (
 	TypeFunction Type = "function"
 	TypeRange    Type = "range"
 	TypeModule   Type = "module"
+	TypeStruct   Type = "struct"
+	TypeStructTp Type = "struct type"
+	TypeMethod   Type = "method"
 )
 
 func (t Type) String() string { return string(t) }
@@ -191,6 +194,135 @@ type Module struct {
 func (m *Module) Type() Type { return TypeModule }
 func (m *Module) String() string {
 	return fmt.Sprintf("<module %s>", m.Name)
+}
+
+// StructType is the value that a struct declaration creates.
+//
+// It carries the field names in declaration order and the method table. A
+// struct declaration binds the type to a name; a struct literal calls the
+// type to build an instance.
+type StructType struct {
+	Name    string
+	Fields  []string
+	Methods map[string]Object
+}
+
+func (t *StructType) Type() Type { return TypeStructTp }
+func (t *StructType) String() string {
+	return "<struct " + t.Name + ">"
+}
+
+// HasField reports whether the type declares a field with name.
+func (t *StructType) HasField(name string) bool {
+	for _, f := range t.Fields {
+		if f == name {
+			return true
+		}
+	}
+	return false
+}
+
+// HasMethod reports whether the type declares a method with name.
+func (t *StructType) HasMethod(name string) bool {
+	if t.Methods == nil {
+		return false
+	}
+	_, ok := t.Methods[name]
+	return ok
+}
+
+// Construct builds an instance from positional values.
+//
+// Values map to fields in declaration order. Missing trailing fields hold
+// nil; extra values are an error.
+func (t *StructType) Construct(positional []Object) (*Struct, error) {
+	if len(positional) > len(t.Fields) {
+		return nil, fmt.Errorf("struct '%s' expects at most %d fields, got %d", t.Name, len(t.Fields), len(positional))
+	}
+	s := &Struct{StructType: t, Values: make(map[string]Object)}
+	for i, v := range positional {
+		s.Values[t.Fields[i]] = v
+	}
+	return s, nil
+}
+
+// ConstructNamed builds an instance from named field values.
+//
+// An unknown field name is an error; a missing field holds nil.
+func (t *StructType) ConstructNamed(names []string, values []Object) (*Struct, error) {
+	s := &Struct{StructType: t, Values: make(map[string]Object)}
+	for i, name := range names {
+		if !t.HasField(name) {
+			return nil, fmt.Errorf("struct '%s' has no field '%s'", t.Name, name)
+		}
+		s.Values[name] = values[i]
+	}
+	return s, nil
+}
+
+// Struct is one instance of a struct type.
+type Struct struct {
+	StructType *StructType
+	Values     map[string]Object
+}
+
+func (s *Struct) Type() Type { return TypeStruct }
+
+// String renders the instance like its source literal: Point{x: 1, y: 2}.
+func (s *Struct) String() string {
+	var b strings.Builder
+	b.WriteString(s.StructType.Name)
+	b.WriteString("{")
+	for i, f := range s.StructType.Fields {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString(f)
+		b.WriteString(": ")
+		if v, ok := s.Values[f]; ok {
+			b.WriteString(v.String())
+		} else {
+			b.WriteString("nil")
+		}
+	}
+	b.WriteString("}")
+	return b.String()
+}
+
+// Repr renders the instance with nested values in literal form.
+func (s *Struct) Repr() string {
+	var b strings.Builder
+	b.WriteString(s.StructType.Name)
+	b.WriteString("{")
+	for i, f := range s.StructType.Fields {
+		if i > 0 {
+			b.WriteString(", ")
+		}
+		b.WriteString(f)
+		b.WriteString(": ")
+		if v, ok := s.Values[f]; ok {
+			b.WriteString(Repr(v))
+		} else {
+			b.WriteString("nil")
+		}
+	}
+	b.WriteString("}")
+	return b.String()
+}
+
+// BoundMethod is a method value with its receiver bound.
+//
+// Reading a method from an instance, as in p.area, returns a BoundMethod.
+// Calling it runs the method with self set to the receiver.
+type BoundMethod struct {
+	Name     string
+	Receiver Object
+	Method   Object
+}
+
+func (m *BoundMethod) Type() Type { return TypeMethod }
+func (m *BoundMethod) String() string {
+	return "<method " + m.Name + ">"
 }
 
 // Repr renders o in a form that is close to its source literal.

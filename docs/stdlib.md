@@ -1,6 +1,6 @@
 # Standard Library
 
-This page lists the built-in functions of Sprout 0.3.
+This page lists the built-in functions of Sprout 0.4.
 They are available in every program without an import.
 
 ## Output
@@ -21,6 +21,8 @@ They are available in every program without an import.
 | `bool(x)` | Converts x to a boolean. |
 | `type(x)` | Returns the type name of x as a string. |
 
+`type` reports `struct` for an instance, `struct type` for a struct
+declaration, and `method` for a bound method.
 `int` and `float` accept numbers, booleans, and numeric strings.
 
 ## Values

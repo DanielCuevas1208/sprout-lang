@@ -62,8 +62,13 @@ const (
 	OpLe
 	OpGt
 	OpGe
-	OpImport     // uint16 index into Program.Modules
-	OpMakeModule // uint16 index of the module name constant
+	OpImport      // uint16 index into Program.Modules
+	OpMakeModule  // uint16 index of the module name constant
+	OpMakeStruct  // uint16 type-name constant, uint16 field count
+	OpAddMethod   // uint16 method-name constant
+	OpGetMember   // uint16 member-name constant
+	OpSetMember   // uint16 member-name constant
+	OpBuildStruct // uint16 count of named field/value pairs
 )
 
 // opNames maps an opcode to its disassembly name.
@@ -110,6 +115,11 @@ var opNames = map[Opcode]string{
 	OpGe:          "GE",
 	OpImport:      "IMPORT",
 	OpMakeModule:  "MAKE_MODULE",
+	OpMakeStruct:  "MAKE_STRUCT",
+	OpAddMethod:   "ADD_METHOD",
+	OpGetMember:   "GET_MEMBER",
+	OpSetMember:   "SET_MEMBER",
+	OpBuildStruct: "BUILD_STRUCT",
 }
 
 // String returns the disassembly name of an opcode.
@@ -288,12 +298,32 @@ func (d *disassembler) instruction(ip int) (int, bool) {
 		idx := U16(d.fn.Code, ip+1)
 		fmt.Fprintf(&d.b, "  %d  (%s)", idx, d.fn.Consts[idx])
 		return ip + 3, true
-	case OpNewEnv, OpGetLocal, OpSetLocal, OpBuildList, OpBuildMap:
+	case OpNewEnv, OpGetLocal, OpSetLocal, OpBuildList, OpBuildMap, OpBuildStruct:
 		fmt.Fprintf(&d.b, "  %d", U16(d.fn.Code, ip+1))
 		return ip + 3, true
 	case OpGetUp, OpSetUp:
 		fmt.Fprintf(&d.b, "  depth %d slot %d", U16(d.fn.Code, ip+1), U16(d.fn.Code, ip+3))
 		return ip + 5, true
+	case OpMakeStruct:
+		idx := U16(d.fn.Code, ip+1)
+		name := "<unknown>"
+		if int(idx) < len(d.fn.Consts) {
+			if s, ok := d.fn.Consts[idx].(object.Str); ok {
+				name = s.Value
+			}
+		}
+		fmt.Fprintf(&d.b, "  %d  (%s) fields %d", idx, name, U16(d.fn.Code, ip+3))
+		return ip + 5, true
+	case OpAddMethod, OpGetMember, OpSetMember:
+		idx := U16(d.fn.Code, ip+1)
+		name := "<unknown>"
+		if int(idx) < len(d.fn.Consts) {
+			if s, ok := d.fn.Consts[idx].(object.Str); ok {
+				name = s.Value
+			}
+		}
+		fmt.Fprintf(&d.b, "  %d  (%s)", idx, name)
+		return ip + 3, true
 	case OpBuiltin:
 		idx := U16(d.fn.Code, ip+1)
 		name := "<unknown>"

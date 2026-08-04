@@ -1,6 +1,6 @@
 # Sprout Grammar
 
-This document is the formal grammar of Sprout version 0.3.
+This document is the formal grammar of Sprout version 0.4.
 
 ## Notation
 
@@ -42,6 +42,7 @@ A floating-point literal needs a digit before the decimal point.
 ```
 program       := statement*
 statement     := import_stmt | let_decl | const_decl | fn_decl
+               | struct_decl | interface_decl
                | export_stmt
                | if_stmt | while_stmt | for_stmt
                | return_stmt | break_stmt | continue_stmt
@@ -55,30 +56,58 @@ A module exposes names with `export`.
 
 ```
 import_stmt   := "import" string ["as" identifier]
-export_stmt   := "export" (let_decl | const_decl | fn_decl)
+export_stmt   := "export" (let_decl | const_decl | fn_decl | struct_decl)
 ```
 
 An import and an export may only appear at the top level.
 An export may only appear in a module file, which is a file loaded by an
 import. The binding name of an import is the base name of its path unless
 the `as` clause renames it.
+An interface cannot be exported. Interfaces are file-local.
 
 ## Declarations
 
 ```
 let_decl      := "let" identifier [":" type] "=" expr
 const_decl    := "const" identifier [":" type] "=" expr
-fn_decl       := "fn" identifier "(" params ")" block
+fn_decl       := "fn" [identifier "."] identifier "(" params ")" block
 params        := [ param {"," param} [","] ]
 param         := identifier [":" type]
 type          := identifier
 ```
+
+A `fn_decl` with a receiver names a method.
+The receiver names a struct type.
+The method body can read the receiver through `self`.
+See `docs/structs.md` for the full reference.
 
 The `fn` keyword also creates an anonymous function as an expression.
 
 ```
 fn_expr       := "fn" "(" params ")" block
 ```
+
+## Structs and interfaces
+
+```
+struct_decl   := "struct" identifier "{" identifier {"," identifier} "}"
+interface_decl := "interface" identifier "{" method_sig {"," method_sig} "}"
+method_sig    := identifier "(" params ")"
+```
+
+A struct lists its field names. A field holds any value.
+A struct literal calls the type name with values:
+
+```
+struct_lit    := identifier "(" [named_arg {"," named_arg}] ")"
+named_arg     := identifier ":" expr
+```
+
+A call with `name: value` pairs builds a struct instance.
+A call with plain values fills fields in declaration order.
+A named argument must name an existing field.
+An interface names methods. A struct satisfies an interface when it
+declares every listed method with the same arity.
 
 ## Control flow
 
@@ -121,12 +150,13 @@ The unary minus binds looser than power. So `-3 ^ 2` means `-(3 ^ 2)`.
 list_lit      := "[" [ expr {"," expr} [","] ] "]"
 map_lit       := "{" [ map_entry {"," map_entry} [","] ] "}"
 map_entry     := expr ":" expr
-call          := primary "(" [ expr {"," expr} [","] ] ")"
+call          := primary "(" [ arg {"," arg} [","] ] ")"
+arg           := expr | identifier ":" expr
 index         := primary "[" expr "]"
 member        := primary "." identifier
 ```
 
-A member access reads an exported name of a module value.
+A member access reads a field, a method, or an exported module name.
 
 ## Precedence table
 

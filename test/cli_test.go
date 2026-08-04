@@ -78,7 +78,7 @@ func TestVersion(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("version exit code %d", code)
 	}
-	if !strings.Contains(out, "0.3.0") {
+	if !strings.Contains(out, "0.4.0") {
 		t.Errorf("version output: %q", out)
 	}
 }
@@ -100,6 +100,34 @@ func TestRunVM(t *testing.T) {
 	}
 	if !strings.Contains(out, "fizzbuzz") {
 		t.Errorf("output: %q", out)
+	}
+}
+
+func TestRunStructProgramOnBothEngines(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "struct.spr")
+	src := "struct Point { x y }\n" +
+		"fn Point.sum() { return self.x + self.y }\n" +
+		"let p = Point(3, 4)\n" +
+		"print(p.sum())\n" +
+		"p.x = 9\n" +
+		"print(p)\n"
+	if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runOut, _, runCode := runCLI(t, "", "run", path)
+	if runCode != 0 {
+		t.Fatalf("run exit code %d", runCode)
+	}
+	vmOut, _, vmCode := runCLI(t, "", "vm", path)
+	if vmCode != 0 {
+		t.Fatalf("vm exit code %d", vmCode)
+	}
+	if runOut != vmOut {
+		t.Errorf("engines differ:\nrun: %q\n vm: %q", runOut, vmOut)
+	}
+	if !strings.Contains(runOut, "7") || !strings.Contains(runOut, "Point{x: 9, y: 4}") {
+		t.Errorf("output: %q", runOut)
 	}
 }
 
@@ -181,6 +209,22 @@ func TestCheckBadProgram(t *testing.T) {
 		t.Fatalf("check should fail, exit code 0")
 	}
 	if !strings.Contains(errOut, "undefined name 'missing_name'") {
+		t.Errorf("stderr: %q", errOut)
+	}
+}
+
+func TestCheckStructError(t *testing.T) {
+	src := "struct Point { x }\nlet p = Point(1)\nprint(p.missing)\n"
+	dir := t.TempDir()
+	path := filepath.Join(dir, "badstruct.spr")
+	if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, errOut, code := runCLI(t, "", "check", path)
+	if code == 0 {
+		t.Fatalf("check should fail, exit code 0")
+	}
+	if !strings.Contains(errOut, "no field or method 'missing'") {
 		t.Errorf("stderr: %q", errOut)
 	}
 }

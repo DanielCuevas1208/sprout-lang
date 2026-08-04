@@ -185,6 +185,61 @@ func (c *Compiler) enterFn(name string, params []*ast.Param, body *ast.Block) ui
 	return c.b().Const(fn)
 }
 
+// compileStruct emits a struct declaration.
+//
+// The field names are pushed as constants and OpMakeStruct builds the type
+// value. The result is bound to the struct name.
+func (c *Compiler) compileStruct(n *ast.StructStmt) {
+	c.declare(n.Name.Name, true, n.Name.Position)
+	for _, f := range n.Fields {
+		idx := c.b().Const(object.Str{Value: f.Name})
+		c.b().AddU16(code.OpPushConst, idx, n.Name.Position)
+	}
+	nameIdx := c.b().Const(object.Str{Value: n.Name.Name})
+	c.b().AddU16Pair(code.OpMakeStruct, nameIdx, uint16(len(n.Fields)), n.StructPos)
+	c.emitSet(n.Name.Name, n.Name.Position)
+}
+
+// compileMethod emits a method declaration.
+//
+// The receiver type is loaded from its slot, the method body is compiled as
+// a closure, and OpAddMethod registers the pair on the type.
+func (c *Compiler) compileMethod(n *ast.FnStmt) {
+	nameIdx := c.b().Const(object.Str{Value: n.Name.Name})
+	c.emitGet(n.Receiver.Name, n.Receiver.Position)
+	idx := c.enterMethod(n.Receiver.Name, n.Name.Name, n.Params, n.Body)
+	c.b().AddU16(code.OpClosure, idx, n.FnPos)
+	c.b().AddU16(code.OpAddMethod, nameIdx, n.Name.Position)
+}
+
+// enterMethod compiles a method body and returns its constant index.
+//
+// A method reserves slot 0 for the implicit self receiver. The compiled
+// function's parameter list starts with self, so arity checks on the bound
+// method call match the receiver plus the declared parameters.
+func (c *Compiler) enterMethod(typeName, name string, params []*ast.Param, body *ast.Block) uint16 {
+	paramNames := make([]string, 0, len(params)+1)
+	paramNames = append(paramNames, "self")
+	for _, p := range params {
+		paramNames = append(paramNames, p.Name.Name)
+	}
+	sc := newScope(c.cur())
+	sc.names["self"] = &symbol{slot: 0}
+	for i, p := range params {
+		sc.names[p.Name.Name] = &symbol{slot: i + 1}
+	}
+	sc.nextSlot = 1 + len(params)
+	prevLoops := c.loops
+	c.loops = nil
+	c.pushFn(code.NewBuilder(typeName+"."+name, c.file.Name, paramNames), sc)
+	c.compileStmts(body.Stmts)
+	c.b().Add(code.OpReturn, endPos(body.Stmts))
+	fn := c.finishFn()
+	c.popFn()
+	c.loops = prevLoops
+	return c.b().Const(fn)
+}
+
 // declare binds name to the next slot in the current scope.
 func (c *Compiler) declare(name string, isConst bool, pos source.Pos) {
 	sc := c.cur()
@@ -239,8 +294,11 @@ func (c *Compiler) popScope(envOff int, pos source.Pos) {
 // Function names are pre-declared so later statements and recursion can see
 // them. This mirrors the checker and the interpreter's forward references.
 func (c *Compiler) compileStmts(stmts []ast.Stmt) {
+	// Pre-declare function names so later statements and recursion can see
+	// them. Methods bind to a struct type instead of a name, so they are
+	// skipped. This mirrors the checker.
 	for _, s := range stmts {
-		if fn, ok := s.(*ast.FnStmt); ok {
+		if fn, ok := s.(*ast.FnStmt); ok && fn.Receiver == nil {
 			c.declare(fn.Name.Name, true, fn.Name.Position)
 		}
 	}
@@ -264,9 +322,19 @@ func (c *Compiler) compileStmt(s ast.Stmt) {
 		c.compileImport(n)
 
 	case *ast.FnStmt:
+		if n.Receiver != nil {
+			c.compileMethod(n)
+			break
+		}
 		idx := c.enterFn(n.Name.Name, n.Params, n.Body)
 		c.b().AddU16(code.OpClosure, idx, n.FnPos)
 		c.emitSet(n.Name.Name, n.Name.Position)
+
+	case *ast.StructStmt:
+		c.compileStruct(n)
+
+	case *ast.InterfaceStmt:
+		// Interfaces are a static contract; they compile to nothing.
 
 	case *ast.ExprStmt:
 		c.compileExpr(n.X)
@@ -541,6 +609,10 @@ func (c *Compiler) compileExpr(e ast.Expr) {
 		c.compileAssign(n)
 
 	case *ast.CallExpr:
+		if len(n.Named) > 0 {
+			c.compileStructLit(n)
+			break
+		}
 		if len(n.Args) > maxCallArgs {
 			c.failf(n.Lparen, "cannot call a function with more than %d arguments", maxCallArgs)
 		}
@@ -556,11 +628,9 @@ func (c *Compiler) compileExpr(e ast.Expr) {
 		c.b().Add(code.OpGetIndex, n.Lbracket)
 
 	case *ast.MemberExpr:
-		// A module member reads like an index by a string name.
 		c.compileExpr(n.X)
 		idx := c.b().Const(object.Str{Value: n.Name.Name})
-		c.b().AddU16(code.OpPushConst, idx, n.Name.Position)
-		c.b().Add(code.OpGetIndex, n.DotPos)
+		c.b().AddU16(code.OpGetMember, idx, n.DotPos)
 
 	case *ast.FnExpr:
 		idx := c.enterFn("", n.Params, n.Body)
@@ -639,9 +709,29 @@ func (c *Compiler) compileAssign(n *ast.AssignExpr) {
 		c.compileExpr(t.Index)
 		c.compileExpr(n.Value)
 		c.b().Add(code.OpSetIndex, n.OpPos)
+	case *ast.MemberExpr:
+		c.compileExpr(t.X)
+		c.compileExpr(n.Value)
+		idx := c.b().Const(object.Str{Value: t.Name.Name})
+		c.b().AddU16(code.OpSetMember, idx, n.OpPos)
 	default:
 		c.failf(n.OpPos, "internal error: invalid assignment target")
 	}
+}
+
+// compileStructLit emits a named struct literal.
+//
+// The struct type is loaded from its slot, then each named field is pushed
+// as a name/value pair. OpBuildStruct gathers the pairs and builds the
+// instance.
+func (c *Compiler) compileStructLit(n *ast.CallExpr) {
+	c.compileExpr(n.Callee)
+	for _, na := range n.Named {
+		nameIdx := c.b().Const(object.Str{Value: na.Name.Name})
+		c.b().AddU16(code.OpPushConst, nameIdx, na.Name.Position)
+		c.compileExpr(na.Value)
+	}
+	c.b().AddU16(code.OpBuildStruct, uint16(len(n.Named)), n.Lparen)
 }
 
 // emitGet loads a name onto the stack.

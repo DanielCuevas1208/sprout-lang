@@ -166,6 +166,40 @@ func runBundleVM(src string) (string, *vm.RunError) {
 	return stdout.String(), rerr
 }
 
+// TestModuleStructParity exports a struct and its methods from a module and
+// uses them from the entry file on both engines.
+func TestModuleStructParity(t *testing.T) {
+	dir := writeProject(t, map[string]string{
+		"main.spr": "import \"geometry\" as g\n" +
+			"let p = g.Point(2, 3)\n" +
+			"print(p)\n" +
+			"print(p.sum())\n" +
+			"p.x = 10\n" +
+			"print(p.sum())\n",
+		"lib/geometry.spr": "export struct Point { x y }\n" +
+			"export fn Point.sum() {\n" +
+			"    return self.x + self.y\n" +
+			"}\n",
+	})
+	g := loadProject(dir)
+
+	ivOut, ivErr := runGraphInterp(g)
+	vmOut, vmErr := runGraphVM(g)
+	if ivErr != nil {
+		t.Fatalf("interpreter error: %s", ivErr.Message)
+	}
+	if vmErr != nil {
+		t.Fatalf("vm error: %s", vmErr.Message)
+	}
+	if ivOut != vmOut {
+		t.Errorf("engines differ:\ninterp: %q\n    vm: %q", ivOut, vmOut)
+	}
+	want := "Point{x: 2, y: 3}\n5\n13\n"
+	if ivOut != want {
+		t.Errorf("output:\n got: %q\nwant: %q", ivOut, want)
+	}
+}
+
 // TestModuleCycleParity checks that both engines reject the same cycle.
 func TestModuleCycleParity(t *testing.T) {
 	dir := writeProject(t, map[string]string{

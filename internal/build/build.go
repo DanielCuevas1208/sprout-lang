@@ -137,6 +137,10 @@ func checkReservedNames(g *module.Graph) error {
 			case *ast.LetStmt:
 				name = n.Name.Name
 			case *ast.FnStmt:
+				if n.Receiver == nil {
+					name = n.Name.Name
+				}
+			case *ast.StructStmt:
 				name = n.Name.Name
 			case *ast.ImportStmt:
 				name = n.Name.Name

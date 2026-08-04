@@ -113,10 +113,50 @@ func (p *sourcePrinter) node(n Node) {
 			p.b.WriteString("export ")
 		}
 		p.b.WriteString("fn ")
+		if v.Receiver != nil {
+			p.name(v.Receiver)
+			p.b.WriteString(".")
+		}
 		p.name(v.Name)
 		p.params(v.Params)
 		p.space()
 		p.block(v.Body)
+	case *StructStmt:
+		if v.Export && !p.bundle {
+			p.b.WriteString("export ")
+		}
+		p.b.WriteString("struct ")
+		p.name(v.Name)
+		p.b.WriteString(" {")
+		p.indent++
+		for _, f := range v.Fields {
+			p.nl()
+			p.writeIndent()
+			p.name(f)
+		}
+		p.indent--
+		if len(v.Fields) > 0 {
+			p.nl()
+			p.writeIndent()
+		}
+		p.b.WriteString("}")
+	case *InterfaceStmt:
+		p.b.WriteString("interface ")
+		p.name(v.Name)
+		p.b.WriteString(" {")
+		p.indent++
+		for _, m := range v.Methods {
+			p.nl()
+			p.writeIndent()
+			p.name(m.Name)
+			p.params(m.Params)
+		}
+		p.indent--
+		if len(v.Methods) > 0 {
+			p.nl()
+			p.writeIndent()
+		}
+		p.b.WriteString("}")
 	case *ImportStmt:
 		if p.bundle {
 			return
@@ -295,6 +335,14 @@ func (p *sourcePrinter) expr(e Expr, minPrec int) {
 				p.b.WriteString(", ")
 			}
 			p.expr(a, 0)
+		}
+		for i, na := range v.Named {
+			if i > 0 || len(v.Args) > 0 {
+				p.b.WriteString(", ")
+			}
+			p.name(na.Name)
+			p.b.WriteString(": ")
+			p.expr(na.Value, 0)
 		}
 		p.b.WriteString(")")
 	case *IndexExpr:

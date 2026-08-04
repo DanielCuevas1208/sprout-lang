@@ -143,6 +143,49 @@ print(type([1]))
 print(str(42))
 print(int("42"))
 print(round(2.5))`,
+		`struct Point { x y }
+fn Point.sum() { return self.x + self.y }
+let a = Point(1, 2)
+let b = Point(x: 3, y: 4)
+print(a)
+print(a.sum(), b.sum())
+a.x = 9
+print(a)
+print(a.sum())`,
+		`struct Circle { radius }
+struct Square { side }
+interface Shape { area() }
+fn Circle.area() { return 3.14 * self.radius * self.radius }
+fn Square.area() { return self.side * self.side }
+let shapes = [Circle(radius: 2), Square(side: 3)]
+print(shapes[0].area(), shapes[1].area())
+let total = 0.0
+for s in shapes {
+    total = total + s.area()
+}
+print(round(total * 100) / 100.0)`,
+		`struct Tally { total }
+fn Tally.add(n) {
+    self.total = self.total + n
+    return self.total
+}
+let t = Tally(0)
+print(t.add(2), t.add(3))
+print(t.total)`,
+		`struct Box { v }
+fn Box.get() { return self.v }
+let b = Box(41)
+let g = b.get
+print(g() + 1)`,
+		`struct Node { name }
+fn Node.greet(prefix) {
+    return prefix + " " + self.name
+}
+let n = Node("sprout")
+print(n.greet("hello"))
+print(type(n))
+print(type(Node))
+print(type(n.greet))`,
 	}
 
 	for _, src := range cases {
@@ -172,6 +215,12 @@ func TestEnginesAgreeOnErrors(t *testing.T) {
 		"[1, 2][9]",
 		`fn f(a) { return a } f()`,
 		"print(1())",
+		`struct Point { x }
+let p = Point(1)
+print(p.missing)`,
+		`struct Point { x }
+let p = Point(1)
+p.missing = 2`,
 	}
 	for _, src := range cases {
 		ivOut, ivErr := runInterpSrc(src)

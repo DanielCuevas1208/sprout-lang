@@ -105,6 +105,10 @@ func (p *Parser) parseStatement() ast.Stmt {
 		return p.parseExport()
 	case token.IMPORT:
 		return p.parseImport()
+	case token.STRUCT:
+		return p.parseStruct(false)
+	case token.INTERFACE:
+		return p.parseInterface()
 	case token.FN:
 		if p.peek(1).Kind == token.IDENT {
 			return p.parseFnDecl()
@@ -190,10 +194,107 @@ func (p *Parser) parseExport() ast.Stmt {
 			st.(*ast.FnStmt).Export = true
 		}
 		return st
+	case token.STRUCT:
+		st := p.parseStruct(true)
+		if st != nil {
+			st.(*ast.StructStmt).Export = true
+		}
+		return st
+	case token.INTERFACE:
+		p.errorf(exportTok.Pos, "interfaces cannot be exported; they are file-local")
+		p.next()
+		p.recoverStatement()
+		return nil
 	}
 	p.errorf(exportTok.Pos, "expected a declaration after 'export', found %s", tokenString(p.cur()))
 	p.recoverStatement()
 	return nil
+}
+
+// parseStruct parses "struct" NAME "{" field* "}".
+//
+// Fields are bare identifiers, separated by newlines or commas. Fields carry
+// no static type; the checker rejects the reserved name self.
+func (p *Parser) parseStruct(exported bool) ast.Stmt {
+	structTok := p.next() // struct
+	name := p.expectIdent("a name after 'struct'")
+	if name == nil {
+		return nil
+	}
+	if !p.at(token.LBRACE) {
+		p.errorf(p.cur().Pos, "expected '{' to begin the struct body, found %s", tokenString(p.cur()))
+		p.recoverStatement()
+		return nil
+	}
+	p.open()
+	p.next() // {
+	p.skipNewlines()
+
+	var fields []*ast.Ident
+	for !p.at(token.RBRACE) {
+		if p.at(token.EOF) {
+			p.errorf(p.cur().Pos, "unexpected end of file in struct body")
+			break
+		}
+		field := p.expectIdent("a field name")
+		if field == nil {
+			break
+		}
+		fields = append(fields, field)
+		p.skipNewlines()
+		if p.at(token.COMMA) {
+			p.next()
+			p.skipNewlines()
+		}
+	}
+	p.close()
+	p.next() // }
+	return &ast.StructStmt{StructPos: structTok.Pos, Export: exported, Name: name, Fields: fields}
+}
+
+// parseInterface parses "interface" NAME "{" method* "}".
+//
+// Each method is a name followed by a parameter list. The checker records
+// the method arity as part of the interface contract.
+func (p *Parser) parseInterface() ast.Stmt {
+	ifTok := p.next() // interface
+	name := p.expectIdent("a name after 'interface'")
+	if name == nil {
+		return nil
+	}
+	if !p.at(token.LBRACE) {
+		p.errorf(p.cur().Pos, "expected '{' to begin the interface body, found %s", tokenString(p.cur()))
+		p.recoverStatement()
+		return nil
+	}
+	p.open()
+	p.next() // {
+	p.skipNewlines()
+
+	var methods []*ast.InterfaceMethod
+	for !p.at(token.RBRACE) {
+		if p.at(token.EOF) {
+			p.errorf(p.cur().Pos, "unexpected end of file in interface body")
+			break
+		}
+		mname := p.expectIdent("a method name")
+		if mname == nil {
+			break
+		}
+		params, ok := p.parseParams(mname.Position)
+		if !ok {
+			break
+		}
+		methods = append(methods, &ast.InterfaceMethod{Name: mname, Params: params})
+		p.skipNewlines()
+		if p.at(token.COMMA) {
+			p.next()
+			p.skipNewlines()
+		}
+	}
+	p.close()
+	p.next() // }
+	return &ast.InterfaceStmt{InterfacePos: ifTok.Pos, Name: name, Methods: methods}
 }
 
 // parseImport parses "import" STRING ["as" identifier].
@@ -243,6 +344,16 @@ func (p *Parser) parseFnDecl() ast.Stmt {
 	if name == nil {
 		return nil
 	}
+	var receiver *ast.Ident
+	if p.at(token.DOT) {
+		// "fn Type.method(...)": the first name is the receiver type.
+		p.next()
+		receiver = name
+		name = p.expectIdent("a method name after '.'")
+		if name == nil {
+			return nil
+		}
+	}
 	params, ok := p.parseParams(fnTok.Pos)
 	if !ok {
 		return nil
@@ -251,7 +362,7 @@ func (p *Parser) parseFnDecl() ast.Stmt {
 	if body == nil {
 		return nil
 	}
-	return &ast.FnStmt{FnPos: fnTok.Pos, Name: name, Params: params, Body: body}
+	return &ast.FnStmt{FnPos: fnTok.Pos, Receiver: receiver, Name: name, Params: params, Body: body}
 }
 
 func (p *Parser) parseIf() ast.Stmt {
@@ -531,6 +642,7 @@ func (p *Parser) parseCall(callee ast.Expr) ast.Expr {
 	p.skipNewlines()
 
 	var args []ast.Expr
+	var named []ast.NamedArg
 	if p.at(token.RPAREN) {
 		p.close()
 		p.next()
@@ -538,11 +650,30 @@ func (p *Parser) parseCall(callee ast.Expr) ast.Expr {
 	}
 
 	for {
-		arg := p.parseExpression(precLowest)
-		if arg == nil {
-			break
+		if p.at(token.IDENT) && p.peek(1).Kind == token.COLON {
+			// A "name: value" pair builds a struct instance.
+			if len(args) > 0 {
+				p.errorf(p.cur().Pos, "cannot mix positional and named arguments")
+			}
+			name := &ast.Ident{Name: p.cur().Lexeme, Position: p.cur().Pos}
+			p.next() // name
+			p.next() // :
+			p.skipNewlines()
+			value := p.parseExpression(precLowest)
+			if value == nil {
+				break
+			}
+			named = append(named, ast.NamedArg{Name: name, Value: value})
+		} else {
+			if len(named) > 0 {
+				p.errorf(p.cur().Pos, "cannot mix positional and named arguments")
+			}
+			arg := p.parseExpression(precLowest)
+			if arg == nil {
+				break
+			}
+			args = append(args, arg)
 		}
-		args = append(args, arg)
 		p.skipNewlines()
 		if p.at(token.COMMA) {
 			p.next()
@@ -563,7 +694,7 @@ func (p *Parser) parseCall(callee ast.Expr) ast.Expr {
 	}
 	p.close()
 	p.next()
-	return &ast.CallExpr{Callee: callee, Lparen: open.Pos, Args: args}
+	return &ast.CallExpr{Callee: callee, Lparen: open.Pos, Args: args, Named: named}
 }
 
 func (p *Parser) parseIndex(x ast.Expr) ast.Expr {
@@ -845,7 +976,7 @@ func (p *Parser) errorf(pos source.Pos, format string, args ...any) {
 
 func isAssignable(e ast.Expr) bool {
 	switch e.(type) {
-	case *ast.Ident, *ast.IndexExpr:
+	case *ast.Ident, *ast.IndexExpr, *ast.MemberExpr:
 		return true
 	}
 	return false
@@ -860,7 +991,7 @@ func assignTargetDesc(e ast.Expr) string {
 	case *ast.CallExpr:
 		return "a call result"
 	case *ast.MemberExpr:
-		return "a module member"
+		return "a field"
 	}
 	return "this expression"
 }

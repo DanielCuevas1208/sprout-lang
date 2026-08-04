@@ -42,6 +42,8 @@ const (
 	IMPORT
 	EXPORT
 	AS
+	STRUCT
+	INTERFACE
 
 	// Operators and punctuation.
 	ASSIGN   // =
@@ -69,27 +71,29 @@ const (
 )
 
 var keywords = map[string]Kind{
-	"let":      LET,
-	"const":    CONST,
-	"fn":       FN,
-	"if":       IF,
-	"elif":     ELIF,
-	"else":     ELSE,
-	"for":      FOR,
-	"in":       IN,
-	"while":    WHILE,
-	"return":   RETURN,
-	"break":    BREAK,
-	"continue": CONTINUE,
-	"true":     TRUE,
-	"false":    FALSE,
-	"nil":      NIL,
-	"and":      AND,
-	"or":       OR,
-	"not":      NOT,
-	"import":   IMPORT,
-	"export":   EXPORT,
-	"as":       AS,
+	"let":       LET,
+	"const":     CONST,
+	"fn":        FN,
+	"if":        IF,
+	"elif":      ELIF,
+	"else":      ELSE,
+	"for":       FOR,
+	"in":        IN,
+	"while":     WHILE,
+	"return":    RETURN,
+	"break":     BREAK,
+	"continue":  CONTINUE,
+	"true":      TRUE,
+	"false":     FALSE,
+	"nil":       NIL,
+	"and":       AND,
+	"or":        OR,
+	"not":       NOT,
+	"import":    IMPORT,
+	"export":    EXPORT,
+	"as":        AS,
+	"struct":    STRUCT,
+	"interface": INTERFACE,
 }
 
 // Lookup returns the keyword kind for name, or IDENT.
@@ -167,6 +171,10 @@ func (k Kind) String() string {
 		return "export"
 	case AS:
 		return "as"
+	case STRUCT:
+		return "struct"
+	case INTERFACE:
+		return "interface"
 	case ASSIGN:
 		return "="
 	case EQ:

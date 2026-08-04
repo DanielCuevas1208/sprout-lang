@@ -95,13 +95,17 @@ func (s *LetStmt) End() source.Pos {
 func (*LetStmt) stmt() {}
 
 // FnStmt declares a named function.
-// Export marks the name as visible to importers of the file.
+//
+// A receiver names the struct that a method binds to. A method has an
+// implicit first parameter called self. Export marks the name as visible to
+// importers of the file.
 type FnStmt struct {
-	FnPos  source.Pos
-	Export bool
-	Name   *Ident
-	Params []*Param
-	Body   *Block
+	FnPos    source.Pos
+	Export   bool
+	Receiver *Ident // optional struct receiver for a method
+	Name     *Ident
+	Params   []*Param
+	Body     *Block
 }
 
 func (s *FnStmt) Pos() source.Pos { return s.FnPos }
@@ -112,6 +116,67 @@ func (s *FnStmt) End() source.Pos {
 	return s.FnPos
 }
 func (*FnStmt) stmt() {}
+
+// StructStmt declares a named struct type.
+//
+// The body lists field names. Fields have no static type; each holds any
+// value. Export marks the type as visible to importers of the file.
+type StructStmt struct {
+	StructPos source.Pos
+	Export    bool
+	Name      *Ident
+	Fields    []*Ident
+}
+
+func (s *StructStmt) Pos() source.Pos { return s.StructPos }
+func (s *StructStmt) End() source.Pos {
+	if len(s.Fields) > 0 {
+		return s.Fields[len(s.Fields)-1].End()
+	}
+	if s.Name != nil {
+		return s.Name.End()
+	}
+	return s.StructPos
+}
+func (*StructStmt) stmt() {}
+
+// InterfaceStmt declares a named interface.
+//
+// An interface lists the methods a struct must provide to satisfy it. A
+// struct satisfies an interface when it declares every listed method with
+// the same arity. Interfaces are a static contract; they carry no runtime
+// value.
+type InterfaceStmt struct {
+	InterfacePos source.Pos
+	Name         *Ident
+	Methods      []*InterfaceMethod
+}
+
+func (s *InterfaceStmt) Pos() source.Pos { return s.InterfacePos }
+func (s *InterfaceStmt) End() source.Pos {
+	if len(s.Methods) > 0 {
+		return s.Methods[len(s.Methods)-1].End()
+	}
+	if s.Name != nil {
+		return s.Name.End()
+	}
+	return s.InterfacePos
+}
+func (*InterfaceStmt) stmt() {}
+
+// InterfaceMethod is one method signature inside an interface.
+type InterfaceMethod struct {
+	Name   *Ident
+	Params []*Param
+}
+
+func (m *InterfaceMethod) Pos() source.Pos { return m.Name.Position }
+func (m *InterfaceMethod) End() source.Pos {
+	if len(m.Params) > 0 {
+		return m.Params[len(m.Params)-1].End()
+	}
+	return m.Name.End()
+}
 
 // Block is a sequence of statements between braces.
 type Block struct {
@@ -336,10 +401,21 @@ func (n *AssignExpr) End() source.Pos { return n.Value.End() }
 func (*AssignExpr) expr()             {}
 
 // CallExpr invokes a function with arguments.
+//
+// Named arguments build a struct instance from its type: the callee names a
+// struct type and each Named entry names one field. A call uses either
+// positional or named arguments, never both.
 type CallExpr struct {
 	Callee Expr
 	Lparen source.Pos
 	Args   []Expr
+	Named  []NamedArg
+}
+
+// NamedArg is one "name: value" argument in a struct literal call.
+type NamedArg struct {
+	Name  *Ident
+	Value Expr
 }
 
 func (n *CallExpr) Pos() source.Pos {
@@ -348,8 +424,16 @@ func (n *CallExpr) Pos() source.Pos {
 	}
 	return n.Lparen
 }
-func (n *CallExpr) End() source.Pos { return n.Lparen }
-func (*CallExpr) expr()             {}
+func (n *CallExpr) End() source.Pos {
+	if len(n.Named) > 0 {
+		return n.Named[len(n.Named)-1].Value.End()
+	}
+	if len(n.Args) > 0 {
+		return n.Args[len(n.Args)-1].End()
+	}
+	return n.Lparen
+}
+func (*CallExpr) expr() {}
 
 // ImportStmt loads a module and binds it to a local name.
 type ImportStmt struct {
@@ -450,12 +534,30 @@ func (p *printer) node(n Node) {
 		})
 	case *FnStmt:
 		head := "fn " + v.Name.Name
-		if v.Export {
+		if v.Receiver != nil {
+			head = "method " + v.Receiver.Name + "." + v.Name.Name
+		} else if v.Export {
 			head = "export " + head
 		}
 		p.group(head, func() {
 			p.params(v.Params)
 			p.block(v.Body)
+		})
+	case *StructStmt:
+		head := "struct " + v.Name.Name
+		if v.Export {
+			head = "export " + head
+		}
+		p.group(head, func() {
+			for _, f := range v.Fields {
+				p.field(f.Name)
+			}
+		})
+	case *InterfaceStmt:
+		p.group("interface "+v.Name.Name, func() {
+			for _, m := range v.Methods {
+				p.field(m.Name.Name + ":" + strconv.Itoa(len(m.Params)))
+			}
 		})
 	case *IfStmt:
 		p.group("if", func() {
@@ -547,6 +649,11 @@ func (p *printer) node(n Node) {
 			p.node(v.Callee)
 			for _, a := range v.Args {
 				p.node(a)
+			}
+			for _, na := range v.Named {
+				p.group("named "+na.Name.Name, func() {
+					p.node(na.Value)
+				})
 			}
 		})
 	case *IndexExpr:

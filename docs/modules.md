@@ -15,6 +15,10 @@ export let TAU = 6.283185
 export fn double(x) {
     return x * 2
 }
+export struct Point { x y }
+export fn Point.sum() {
+    return self.x + self.y
+}
 
 let hidden = 42      // private to this module
 ```
@@ -25,6 +29,8 @@ Another file imports the module and reads its names with a dot.
 // main.spr
 import "math" as m
 print(m.double(m.TAU))     // 12.56637
+let p = m.Point(2, 3)
+print(p.sum())             // 5
 ```
 
 The import binds the base name of the path. The `as` clause renames it.

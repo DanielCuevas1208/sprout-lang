@@ -127,6 +127,50 @@ func TestDisassemble(t *testing.T) {
 	}
 }
 
+func TestStructOpcodeNames(t *testing.T) {
+	for _, c := range []struct {
+		op   Opcode
+		want string
+	}{
+		{OpMakeStruct, "MAKE_STRUCT"},
+		{OpAddMethod, "ADD_METHOD"},
+		{OpGetMember, "GET_MEMBER"},
+		{OpSetMember, "SET_MEMBER"},
+		{OpBuildStruct, "BUILD_STRUCT"},
+	} {
+		if got := c.op.String(); got != c.want {
+			t.Errorf("opcode: got %q, want %q", got, c.want)
+		}
+	}
+}
+
+func TestDisassembleStructOps(t *testing.T) {
+	b := NewBuilder("main", "test.spr", nil)
+	nameIdx := b.Const(object.Str{Value: "Point"})
+	fieldIdx := b.Const(object.Str{Value: "x"})
+	b.AddU16Pair(OpMakeStruct, nameIdx, 1, pos())
+	b.AddU16(OpGetMember, fieldIdx, pos())
+	b.AddU16(OpSetMember, fieldIdx, pos())
+	b.AddU16(OpAddMethod, fieldIdx, pos())
+	b.AddU16(OpBuildStruct, 1, pos())
+	b.Add(OpReturn, pos())
+	out := Disassemble(b.Finish())
+
+	for _, want := range []string{
+		"MAKE_STRUCT",
+		"(Point)",
+		"fields 1",
+		"GET_MEMBER",
+		"SET_MEMBER",
+		"ADD_METHOD",
+		"BUILD_STRUCT",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("disassembly missing %q:\n%s", want, out)
+		}
+	}
+}
+
 func TestFunctionString(t *testing.T) {
 	fn := &Function{Name: "fib"}
 	if fn.String() != "<fn fib>" {

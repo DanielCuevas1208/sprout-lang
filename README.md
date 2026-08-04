@@ -3,7 +3,8 @@
 Sprout is a small programming language that runs on Go.
 It ships with a lexer, a Pratt parser, and two execution engines.
 Version 0.2 added a stack-based bytecode virtual machine.
-Version 0.3 adds file-based modules and a build tool.
+Version 0.3 added file-based modules and a build tool.
+Version 0.4 adds structs, methods, and interfaces.
 The interpreter and the VM share one runtime and one standard library.
 Sprout produces friendly diagnostics that point at the exact problem.
 
@@ -14,6 +15,7 @@ The codebase is structured to grow cleanly over time.
 ## Highlights
 
 - A documented grammar with a line-aware Pratt parser.
+- Structs with methods and interface contracts.
 - A bytecode compiler and a stack-based virtual machine.
 - A tree-walking interpreter that shares the runtime with the VM.
 - A disassembler for the compiled instruction stream.
@@ -150,6 +152,51 @@ Only `nil` and `false` are falsy.
 An expression ends at a newline unless it is inside brackets.
 See `docs/grammar.md` for the formal grammar.
 
+## Structs, methods, and interfaces
+
+Version 0.4 adds named types.
+A struct groups related values into one value.
+A method belongs to a struct type.
+An interface lists the methods a struct must provide.
+
+```sprout
+struct Point {
+    x
+    y
+}
+
+fn Point.sum() {
+    return self.x + self.y
+}
+
+let a = Point(3, 4)
+let b = Point(x: 1, y: 2)
+print(a.sum())   // 7
+print(b.y)       // 2
+
+interface Shape {
+    area()
+}
+
+struct Square { side }
+
+fn Square.area() {
+    return self.side * self.side
+}
+
+fn report(s: Shape) {
+    return "area " + str(s.area())
+}
+
+print(report(Square(side: 3)))   // area 9
+```
+
+Call a struct type to build an instance.
+Use positional values or named values.
+A method body reads its receiver through `self`.
+The checker verifies interface satisfaction before a program runs.
+See `docs/structs.md` for the full reference.
+
 ## Modules
 
 A module is a separate Sprout file.
@@ -227,6 +274,7 @@ The compiler turns a syntax tree into bytecode.
 The VM executes that bytecode with an operand stack and call frames.
 Both engines share the runtime, so they behave identically.
 Version 0.3 runs modules on both engines.
+Version 0.4 runs structs and methods on both engines.
 
 The `dis` command shows the compiled instructions.
 
@@ -254,6 +302,7 @@ The standard library is small and documented.
 It covers output, conversion, lists, maps, strings, and numbers.
 It also provides `assert` for tests and examples.
 Version 0.3 adds `module` for building module values.
+Version 0.4 adds no new builtins. The `type` function reports structs.
 
 ```sprout
 let nums = [1, 2, 3, 4]
@@ -276,6 +325,7 @@ The `examples` directory holds documented programs.
 - `strings.spr` shows string functions.
 - `math.spr` shows numbers and rounding.
 - `higher_order.spr` uses map, filter, and fold.
+- `structs.spr` uses structs, methods, and interfaces.
 - `guess.spr` is an interactive game.
 - `project` is a multi-file module project.
 
@@ -296,6 +346,7 @@ internal/parser  the Pratt parser
 internal/checker static analysis
 internal/module  the module loader and the manifest
 internal/build   the bundler
+internal/object  runtime values, structs, and module values
 internal/runtime value semantics and the standard library
 internal/interp  the tree-walking interpreter
 internal/code    opcodes and the instruction stream
@@ -309,6 +360,7 @@ Each stage is independent.
 The parser feeds the checker and the compiler.
 The module loader turns a project into a graph of parsed files.
 The runtime is the single source of truth for both engines.
+A struct type, its methods, and its field access live in one place.
 Adding a feature means updating the runtime, then both engines stay in step.
 
 ## Development
@@ -345,15 +397,15 @@ All tests pass on Go 1.22 and newer.
 |-------|-------|
 | `internal/lexer` | Tokens, positions, and lexer errors. |
 | `internal/parser` | Precedence, statements, and recovery. |
-| `internal/checker` | Scope, imports, exports, and static errors. |
+| `internal/checker` | Scope, imports, exports, structs, and static errors. |
 | `internal/ast` | Source printer round trips. |
 | `internal/module` | Loading, resolution, cycles, and manifests. |
 | `internal/build` | Bundle output and reserved names. |
-| `internal/runtime` | Arithmetic, comparison, and indexing. |
-| `internal/interp` | Evaluation, closures, and runtime errors. |
+| `internal/runtime` | Arithmetic, comparison, indexing, and members. |
+| `internal/interp` | Evaluation, closures, structs, and runtime errors. |
 | `internal/code` | Opcodes, the builder, and disassembly. |
-| `internal/compiler` | Bytecode for expressions and control flow. |
-| `internal/vm` | Execution, closures, and runtime errors. |
+| `internal/compiler` | Bytecode for expressions, structs, and control flow. |
+| `internal/vm` | Execution, closures, structs, and runtime errors. |
 | `internal/diag` | Diagnostic rendering. |
 | `test` | Example goldens, engine parity, and command line. |
 
@@ -371,13 +423,18 @@ Version 0.3 is complete. It added the module system and the build tool.
 It runs modules on the interpreter and the VM.
 It detects missing modules and import cycles.
 
-Version 0.4 adds structs, methods, and interfaces.
+Version 0.4 is complete. It added structs, methods, and interfaces.
+Structs and methods run on both engines.
+Interfaces are a static contract checked before a program runs.
+
 Version 0.5 adds result types and pattern matching.
 Version 0.6 adds concurrency with channels.
 
 ## Limitations
 
-- The language has no classes or structs yet.
+- Structs have no class inheritance. Methods are bound by name.
+- Interface methods check names and arity only.
+- Interface types cannot be exported from a module.
 - Type annotations are optional and checked lightly.
 - Map keys must be strings.
 - Integer division truncates toward zero.
