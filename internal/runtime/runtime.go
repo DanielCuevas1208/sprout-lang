@@ -443,6 +443,15 @@ func IndexGet(container, idx object.Object) (object.Object, error) {
 			return v, nil
 		}
 		return object.NilValue, nil
+	case *object.Module:
+		ks, ok := idx.(object.Str)
+		if !ok {
+			return nil, FmtErr("module key must be a string")
+		}
+		if v, exists := c.Exports[ks.Value]; exists {
+			return v, nil
+		}
+		return object.NilValue, nil
 	}
 	return nil, FmtErr("cannot index a %s", container.Type())
 }

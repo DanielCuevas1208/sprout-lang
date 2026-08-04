@@ -120,6 +120,19 @@ func endPos(stmts []ast.Stmt) source.Pos {
 	return source.Pos{Line: 1, Column: 1}
 }
 
+// declaredName returns the name bound by an exported declaration.
+func declaredName(decl ast.Stmt) string {
+	switch d := decl.(type) {
+	case *ast.LetStmt:
+		if d.Name != nil {
+			return d.Name.Name
+		}
+	case *ast.FnStmt:
+		return d.Name.Name
+	}
+	return ""
+}
+
 func (c *Compiler) b() *code.Builder { return c.fns[len(c.fns)-1].b }
 
 func (c *Compiler) cur() *scope { return c.fns[len(c.fns)-1].cur }
@@ -217,6 +230,9 @@ func (c *Compiler) popScope(envOff int, pos source.Pos) {
 // them. This mirrors the checker and the interpreter's forward references.
 func (c *Compiler) compileStmts(stmts []ast.Stmt) {
 	for _, s := range stmts {
+		if es, ok := s.(*ast.ExportStmt); ok {
+			s = es.Decl
+		}
 		if fn, ok := s.(*ast.FnStmt); ok {
 			c.declare(fn.Name.Name, true, fn.Name.Position)
 		}
@@ -236,6 +252,22 @@ func (c *Compiler) compileStmt(s ast.Stmt) {
 			c.b().Add(code.OpNil, n.KwPos)
 		}
 		c.emitSet(n.Name.Name, n.KwPos)
+
+	case *ast.ImportStmt:
+		pathIdx := c.b().Const(object.Str{Value: n.Path})
+		c.b().AddU16(code.OpImport, pathIdx, n.ImportPos)
+		c.declare(n.Alias, true, n.ImportPos)
+		c.emitSet(n.Alias, n.ImportPos)
+
+	case *ast.ExportStmt:
+		c.compileStmt(n.Decl)
+		name := declaredName(n.Decl)
+		if name == "" {
+			c.failf(n.ExportPos, "internal error: unsupported exported declaration")
+		}
+		c.emitGet(name, n.ExportPos)
+		nameIdx := c.b().Const(object.Str{Value: name})
+		c.b().AddU16(code.OpExport, nameIdx, n.ExportPos)
 
 	case *ast.FnStmt:
 		idx := c.enterFn(n.Name.Name, n.Params, n.Body)

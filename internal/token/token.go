@@ -39,6 +39,9 @@ const (
 	AND
 	OR
 	NOT
+	IMPORT
+	EXPORT
+	AS
 
 	// Operators and punctuation.
 	ASSIGN   // =
@@ -83,6 +86,9 @@ var keywords = map[string]Kind{
 	"and":      AND,
 	"or":       OR,
 	"not":      NOT,
+	"import":   IMPORT,
+	"export":   EXPORT,
+	"as":       AS,
 }
 
 // Lookup returns the keyword kind for name, or IDENT.
@@ -95,7 +101,7 @@ func Lookup(name string) Kind {
 
 // IsKeyword reports whether k is a language keyword.
 func (k Kind) IsKeyword() bool {
-	return k >= LET && k <= NOT
+	return k >= LET && k <= AS
 }
 
 // String returns a human-readable name for k.
@@ -154,6 +160,12 @@ func (k Kind) String() string {
 		return "or"
 	case NOT:
 		return "not"
+	case IMPORT:
+		return "import"
+	case EXPORT:
+		return "export"
+	case AS:
+		return "as"
 	case ASSIGN:
 		return "="
 	case EQ:

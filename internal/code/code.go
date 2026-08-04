@@ -10,6 +10,7 @@ package code
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/sprout-lang/sprout/internal/object"
@@ -62,6 +63,8 @@ const (
 	OpLe
 	OpGt
 	OpGe
+	OpImport // uint16 index into Consts: load a module and push it
+	OpExport // uint16 index into Consts: record the top as an export
 )
 
 // opNames maps an opcode to its disassembly name.
@@ -106,6 +109,8 @@ var opNames = map[Opcode]string{
 	OpLe:          "LE",
 	OpGt:          "GT",
 	OpGe:          "GE",
+	OpImport:      "IMPORT",
+	OpExport:      "EXPORT",
 }
 
 // String returns the disassembly name of an opcode.
@@ -289,6 +294,14 @@ func (d *disassembler) instruction(ip int) (int, bool) {
 		} else {
 			fmt.Fprintf(&d.b, "  %d", idx)
 		}
+		return ip + 3, true
+	case OpImport, OpExport:
+		idx := U16(d.fn.Code, ip+1)
+		name := "<unknown>"
+		if c, ok := d.fn.Consts[idx].(object.Str); ok {
+			name = strconv.Quote(c.Value)
+		}
+		fmt.Fprintf(&d.b, "  %d  %s", idx, name)
 		return ip + 3, true
 	case OpCall:
 		fmt.Fprintf(&d.b, "  %d", d.fn.Code[ip+1])

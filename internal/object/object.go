@@ -20,6 +20,7 @@ const (
 	TypeMap      Type = "map"
 	TypeFunction Type = "function"
 	TypeRange    Type = "range"
+	TypeModule   Type = "module"
 )
 
 func (t Type) String() string { return string(t) }
@@ -176,6 +177,20 @@ func (r Range) String() string {
 		return fmt.Sprintf("range(%d, %d)", r.Start, r.End)
 	}
 	return fmt.Sprintf("range(%d, %d, %d)", r.Start, r.End, r.Step)
+}
+
+// Module is the value of a loaded Sprout module.
+//
+// A module runs once in an isolated scope. Its exported names form a
+// read-only namespace that importers reach through index access.
+type Module struct {
+	// Exports maps each exported name to its value.
+	Exports map[string]Object
+}
+
+func (m *Module) Type() Type { return TypeModule }
+func (m *Module) String() string {
+	return fmt.Sprintf("<module (%d exports)>", len(m.Exports))
 }
 
 // Repr renders o in a form that is close to its source literal.

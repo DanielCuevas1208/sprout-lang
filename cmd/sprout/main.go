@@ -15,6 +15,7 @@ import (
 	"github.com/sprout-lang/sprout/internal/diag"
 	"github.com/sprout-lang/sprout/internal/interp"
 	"github.com/sprout-lang/sprout/internal/lexer"
+	"github.com/sprout-lang/sprout/internal/module"
 	"github.com/sprout-lang/sprout/internal/parser"
 	"github.com/sprout-lang/sprout/internal/repl"
 	"github.com/sprout-lang/sprout/internal/source"
@@ -22,7 +23,7 @@ import (
 	"github.com/sprout-lang/sprout/internal/vm"
 )
 
-const version = "0.2.0"
+const version = "0.3.0"
 
 func main() {
 	os.Exit(run(os.Args[1:]))
@@ -298,6 +299,12 @@ func runCheck(args []string) int {
 		if hasErrors(diags) {
 			return 1
 		}
+	}
+	// Check every module the program imports, without running them.
+	loader := module.New(nil)
+	if err := loader.CheckProgram(file, prog); err != nil {
+		fmt.Fprintf(os.Stderr, "sprout: %v\n", err)
+		return 1
 	}
 	fmt.Println("ok")
 	return 0

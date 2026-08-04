@@ -6,6 +6,7 @@ import (
 
 	"github.com/sprout-lang/sprout/internal/code"
 	"github.com/sprout-lang/sprout/internal/diag"
+	"github.com/sprout-lang/sprout/internal/object"
 	"github.com/sprout-lang/sprout/internal/parser"
 	"github.com/sprout-lang/sprout/internal/source"
 )
@@ -47,7 +48,8 @@ func nextOffset(b []byte, ip int) int {
 		return ip + 2
 	case code.OpPushConst, code.OpNewEnv, code.OpGetLocal, code.OpSetLocal,
 		code.OpBuiltin, code.OpClosure, code.OpJump, code.OpJumpIfFalse,
-		code.OpJumpIfTrue, code.OpBuildList, code.OpBuildMap, code.OpIterNext:
+		code.OpJumpIfTrue, code.OpBuildList, code.OpBuildMap, code.OpIterNext,
+		code.OpImport, code.OpExport:
 		return ip + 3
 	default:
 		return ip + 1
@@ -330,5 +332,32 @@ func TestCompileASTPositionsTracked(t *testing.T) {
 			t.Errorf("missing position for instruction at offset %d", ip)
 		}
 		ip = nextOffset(main.Code, ip)
+	}
+}
+
+func TestCompileImportAndExport(t *testing.T) {
+	p, err := compileSrc(t, `
+import "lib/math" as m
+export let answer = 42
+export fn go() { return m["square"](2) }
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := opCount(t, p.Main, code.OpImport); got != 1 {
+		t.Errorf("IMPORT count: got %d, want 1", got)
+	}
+	if got := opCount(t, p.Main, code.OpExport); got != 2 {
+		t.Errorf("EXPORT count: got %d, want 2", got)
+	}
+	// The import path lands in the constant pool.
+	found := false
+	for _, c := range p.Main.Consts {
+		if s, ok := c.(object.Str); ok && s.Value == "lib/math" {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("import path missing from the constant pool")
 	}
 }

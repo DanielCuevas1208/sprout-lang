@@ -10,7 +10,7 @@ import (
 
 	"github.com/sprout-lang/sprout/internal/ast"
 	"github.com/sprout-lang/sprout/internal/diag"
-	"github.com/sprout-lang/sprout/internal/interp"
+	"github.com/sprout-lang/sprout/internal/runtime"
 	"github.com/sprout-lang/sprout/internal/source"
 	"github.com/sprout-lang/sprout/internal/token"
 )
@@ -22,6 +22,7 @@ const (
 	symConst
 	symFunc
 	symParam
+	symModule
 )
 
 type symbol struct {
@@ -41,7 +42,7 @@ func newScope(parent *scope) *scope {
 
 // Check reports the diagnostics found in prog.
 func Check(file *source.File, prog *ast.Program) []diag.Diagnostic {
-	c := &checker{file: file}
+	c := &checker{file: file, atTop: true}
 	c.checkStmts(prog.Stmts, newScope(nil))
 	return c.diags
 }
@@ -51,14 +52,17 @@ type checker struct {
 	diags     []diag.Diagnostic
 	funcDepth int
 	loopDepth int
+	// atTop is true only while checking the program's root statement list.
+	// It lets the checker reject imports and exports inside blocks.
+	atTop bool
 }
 
 // builtinNames is the set of predeclared functions.
 var builtinNames = buildBuiltinSet()
 
 func buildBuiltinSet() map[string]bool {
-	set := make(map[string]bool, len(interp.BuiltinNames))
-	for _, n := range interp.BuiltinNames {
+	set := make(map[string]bool, len(runtime.Names))
+	for _, n := range runtime.Names {
 		set[n] = true
 	}
 	return set
@@ -67,6 +71,9 @@ func buildBuiltinSet() map[string]bool {
 func (c *checker) checkStmts(stmts []ast.Stmt, sc *scope) {
 	// Pre-declare function names so functions can call later functions.
 	for _, s := range stmts {
+		if es, ok := s.(*ast.ExportStmt); ok {
+			s = es.Decl
+		}
 		if fn, ok := s.(*ast.FnStmt); ok {
 			c.declare(sc, fn.Name.Name, symFunc, fn.Name.Position, "")
 		}
@@ -74,6 +81,16 @@ func (c *checker) checkStmts(stmts []ast.Stmt, sc *scope) {
 	for _, s := range stmts {
 		c.checkStmt(s, sc)
 	}
+}
+
+// checkBody checks a statement list that is not the program root.
+//
+// Imports and exports are file-level, so this clears the atTop flag.
+func (c *checker) checkBody(stmts []ast.Stmt, sc *scope) {
+	prev := c.atTop
+	c.atTop = false
+	c.checkStmts(stmts, sc)
+	c.atTop = prev
 }
 
 func (c *checker) declare(sc *scope, name string, kind symKind, pos source.Pos, typeAnn string) {
@@ -88,28 +105,35 @@ func (c *checker) checkStmt(s ast.Stmt, sc *scope) {
 	switch n := s.(type) {
 	case *ast.LetStmt:
 		c.checkLet(n, sc)
+	case *ast.ImportStmt:
+		c.checkImport(n, sc)
+	case *ast.ExportStmt:
+		if !c.atTop {
+			c.errorf(n.ExportPos, "'export' can only appear at the top level")
+		}
+		c.checkStmt(n.Decl, sc)
 	case *ast.FnStmt:
 		funcScope := newScope(sc)
 		for _, p := range n.Params {
 			c.checkParam(funcScope, p)
 		}
 		c.funcDepth++
-		c.checkStmts(n.Body.Stmts, funcScope)
+		c.checkBody(n.Body.Stmts, funcScope)
 		c.funcDepth--
 	case *ast.IfStmt:
 		c.checkExpr(n.Cond, sc)
-		c.checkStmts(n.Then.Stmts, newScope(sc))
+		c.checkBody(n.Then.Stmts, newScope(sc))
 		for _, b := range n.Elifs {
 			c.checkExpr(b.Cond, sc)
-			c.checkStmts(b.Body.Stmts, newScope(sc))
+			c.checkBody(b.Body.Stmts, newScope(sc))
 		}
 		if n.Else != nil {
-			c.checkStmts(n.Else.Stmts, newScope(sc))
+			c.checkBody(n.Else.Stmts, newScope(sc))
 		}
 	case *ast.WhileStmt:
 		c.checkExpr(n.Cond, sc)
 		c.loopDepth++
-		c.checkStmts(n.Body.Stmts, newScope(sc))
+		c.checkBody(n.Body.Stmts, newScope(sc))
 		c.loopDepth--
 	case *ast.ForInStmt:
 		c.checkExpr(n.Iterable, sc)
@@ -120,7 +144,7 @@ func (c *checker) checkStmt(s ast.Stmt, sc *scope) {
 			bodyScope.names[n.Var.Name] = symbol{kind: symVar, pos: n.Var.Position}
 		}
 		c.loopDepth++
-		c.checkStmts(n.Body.Stmts, bodyScope)
+		c.checkBody(n.Body.Stmts, bodyScope)
 		c.loopDepth--
 	case *ast.ReturnStmt:
 		if c.funcDepth == 0 {
@@ -150,6 +174,23 @@ func (c *checker) checkParam(sc *scope, p *ast.Param) {
 	}
 	if p.Type != nil {
 		c.checkTypeAnn(p.Type)
+	}
+}
+
+func (c *checker) checkImport(n *ast.ImportStmt, sc *scope) {
+	if !c.atTop {
+		c.errorf(n.ImportPos, "'import' can only appear at the top level")
+	}
+	if n.Path == "" {
+		c.errorf(n.ImportPos, "module path cannot be empty")
+	}
+	if n.Alias == "" {
+		return
+	}
+	if _, dup := sc.names[n.Alias]; dup {
+		c.errorf(n.ImportPos, "duplicate declaration of '%s'", n.Alias)
+	} else {
+		sc.names[n.Alias] = symbol{kind: symModule, pos: n.ImportPos}
 	}
 }
 
@@ -275,7 +316,7 @@ func (c *checker) checkExpr(e ast.Expr, sc *scope) {
 			c.checkParam(fnScope, p)
 		}
 		c.funcDepth++
-		c.checkStmts(n.Body.Stmts, fnScope)
+		c.checkBody(n.Body.Stmts, fnScope)
 		c.funcDepth--
 	}
 }

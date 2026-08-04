@@ -14,7 +14,7 @@ Save the code as `hello.spr`. Run it with `sprout run hello.spr`.
 
 ## Values and types
 
-Sprout has nine value types.
+Sprout has ten value types.
 
 - `int` holds a 64-bit integer.
 - `float` holds a 64-bit number.
@@ -25,6 +25,7 @@ Sprout has nine value types.
 - `map` holds keys and values. Keys are strings.
 - `function` is a callable value.
 - `range` is a sequence of integers.
+- `module` holds the exports of a loaded file.
 
 Use the `type` function to ask for the type of a value.
 
@@ -225,11 +226,46 @@ sprout> x * 7
 sprout> :quit
 ```
 
+## Modules
+
+Split a program across files with `import` and `export`.
+A module runs once, in its own scope.
+Only exported names are visible to importers.
+
+```sprout
+// lib/math.spr
+export fn square(x) {
+    return x * x
+}
+```
+
+```sprout
+// main.spr
+import "lib/math"
+
+print(math["square"](5))   // 25
+```
+
+The bound name comes from the file name.
+Use `as` to choose a different name.
+
+```sprout
+import "lib/math" as m
+print(m["square"](5))      // 25
+```
+
+Module values are read-only namespaces.
+Exported functions share the module scope.
+They can call private helpers and keep module state.
+See `docs/modules.md` for the full reference.
+
 ## Bytecode virtual machine
 
-Sprout 0.2 adds a stack-based bytecode virtual machine.
-It shares the parser, the checker, and the standard library with the
-interpreter. The two engines produce the same results.
+Sprout 0.3 adds a module system on top of the version 0.2 virtual machine.
+The VM shares the parser, the checker, and the standard library with the
+interpreter.
+The VM compiles imports into `IMPORT` instructions.
+It runs every module on a fresh VM with one shared loader.
 
 Run a program on the VM.
 
@@ -250,4 +286,5 @@ Read `docs/bytecode.md` for the full VM reference.
 Read the standard library reference in `docs/stdlib.md`.
 Read the formal grammar in `docs/grammar.md`.
 Read the bytecode virtual machine in `docs/bytecode.md`.
+Read the module system in `docs/modules.md`.
 Run the example programs in the `examples` directory.

@@ -1,0 +1,18 @@
+// numbers.spr is a small library of integer helpers.
+//
+// It is a module. Only the exported names are visible to importers.
+// The name "secret" is private to this module.
+
+export fn square(x) {
+    return x * x
+}
+
+export fn cube(x) {
+    return x * x * x
+}
+
+export const answer = 42
+
+fn secret() {
+    return "hidden"
+}
