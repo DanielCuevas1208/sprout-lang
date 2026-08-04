@@ -1,9 +1,13 @@
 package interp
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/sprout-lang/sprout/internal/diag"
+	"github.com/sprout-lang/sprout/internal/module"
 	"github.com/sprout-lang/sprout/internal/parser"
 	"github.com/sprout-lang/sprout/internal/source"
 )
@@ -364,4 +368,139 @@ print([1, "a", true, nil, 2.5])
 print({"k": [1, 2]})
 print(range(0, 3))
 `, "[1, a, true, nil, 2.5]\n{k: [1, 2]}\nrange(0, 3)\n")
+}
+
+// writeModule writes src to a named file inside dir.
+func writeModule(t *testing.T, dir, name, src string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, name)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// runBundle loads the bundle rooted at dir/main.spr and runs it.
+func runBundle(t *testing.T, dir string) (string, *RunError) {
+	t.Helper()
+	bundle, diags := module.Load(filepath.Join(dir, "main.spr"))
+	for _, d := range diags {
+		if d.Severity == diag.SeverityError {
+			t.Fatalf("load error: %s", d.Message)
+		}
+	}
+	io := &testIO{}
+	iv := NewWithIO(strings.NewReader(""), &io.out, &io.err)
+	_, rerr := iv.ExecBundle(bundle)
+	return io.out.String(), rerr
+}
+
+func TestBundleImports(t *testing.T) {
+	dir := t.TempDir()
+	writeModule(t, dir, "lib/g.spr",
+		"export fn greet(name) { return \"hello, \" + name }\nexport const punc = \"!\"\n")
+	writeModule(t, dir, "main.spr",
+		"import \"lib/g.spr\"\nprint(greet(\"world\") + punc)\n")
+	got, rerr := runBundle(t, dir)
+	if rerr != nil {
+		t.Fatalf("runtime error: %s", rerr.Message)
+	}
+	if got != "hello, world!\n" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestBundleAliasImport(t *testing.T) {
+	dir := t.TempDir()
+	writeModule(t, dir, "calc.spr",
+		"export fn add(a, b) { return a + b }\nexport fn mul(a, b) { return a * b }\n")
+	writeModule(t, dir, "main.spr",
+		"import calc from \"calc.spr\"\nprint(calc[\"add\"](2, 3))\nprint(calc[\"mul\"](3, 4))\n")
+	got, rerr := runBundle(t, dir)
+	if rerr != nil {
+		t.Fatalf("runtime error: %s", rerr.Message)
+	}
+	if got != "5\n12\n" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestBundleModuleRunsOnce(t *testing.T) {
+	dir := t.TempDir()
+	writeModule(t, dir, "lib/a.spr", "print(\"init a\")\nexport let x = 1\n")
+	writeModule(t, dir, "lib/b.spr", "import \"a.spr\"\nexport let y = x + 1\n")
+	writeModule(t, dir, "lib/c.spr", "import \"a.spr\"\nexport let z = x + 2\n")
+	writeModule(t, dir, "main.spr",
+		"import \"lib/b.spr\"\nimport \"lib/c.spr\"\nprint(y, z)\n")
+	got, rerr := runBundle(t, dir)
+	if rerr != nil {
+		t.Fatalf("runtime error: %s", rerr.Message)
+	}
+	// Module a is shared by b and c, so its top level runs once.
+	if got != "init a\n2 3\n" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestBundleModulePrivacy(t *testing.T) {
+	dir := t.TempDir()
+	writeModule(t, dir, "m.spr",
+		"export let visible = 1\nlet secret = 2\n")
+	writeModule(t, dir, "main.spr",
+		"import m from \"m.spr\"\nprint(m[\"visible\"])\nprint(m[\"secret\"])\n")
+	got, rerr := runBundle(t, dir)
+	if rerr != nil {
+		t.Fatalf("runtime error: %s", rerr.Message)
+	}
+	// A module map only exposes exported names.
+	if got != "1\nnil\n" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestBundleModuleClosures(t *testing.T) {
+	dir := t.TempDir()
+	writeModule(t, dir, "m.spr",
+		"let count = 0\n"+
+			"export fn next() {\n"+
+			"	count = count + 1\n"+
+			"	return count\n"+
+			"}\n")
+	writeModule(t, dir, "main.spr",
+		"import \"m.spr\"\nprint(next(), next(), next())\n")
+	got, rerr := runBundle(t, dir)
+	if rerr != nil {
+		t.Fatalf("runtime error: %s", rerr.Message)
+	}
+	if got != "1 2 3\n" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestBundleImportHoisted(t *testing.T) {
+	dir := t.TempDir()
+	writeModule(t, dir, "m.spr", "export let x = 7\n")
+	// The use of x comes before the import statement, yet still works.
+	writeModule(t, dir, "main.spr", "print(x)\nimport \"m.spr\"\n")
+	got, rerr := runBundle(t, dir)
+	if rerr != nil {
+		t.Fatalf("runtime error: %s", rerr.Message)
+	}
+	if got != "7\n" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestBundleErrorPointsAtModule(t *testing.T) {
+	dir := t.TempDir()
+	writeModule(t, dir, "m.spr", "export fn kaboom() {\n\treturn 1 / 0\n}\n")
+	writeModule(t, dir, "main.spr", "import \"m.spr\"\nprint(kaboom())\n")
+	_, rerr := runBundle(t, dir)
+	if rerr == nil {
+		t.Fatal("expected a runtime error")
+	}
+	if rerr.File == nil || !strings.HasSuffix(rerr.File.Name, "m.spr") {
+		t.Errorf("error file: %v", rerr.File)
+	}
 }

@@ -3,18 +3,20 @@
 This document describes the Sprout virtual machine.
 It covers the compiler, the instruction set, and the runtime.
 Read `docs/grammar.md` first for the syntax tree concepts.
+Read `docs/modules.md` for how modules compile.
 
 ## Pipeline
 
-A program moves through five stages.
+A program moves through six stages.
 
 ```text
-source -> parser -> checker -> compiler -> VM
+source -> modules -> parser -> checker -> compiler -> VM
 ```
 
-The parser builds a syntax tree.
+The module loader gathers the entry file and its imports.
+The parser builds a syntax tree for each file.
 The checker rejects bad programs.
-The compiler turns the tree into instructions.
+The compiler turns the trees into instructions.
 The VM executes those instructions.
 
 The `sprout vm` command runs the whole pipeline.
@@ -89,6 +91,7 @@ This matches the interpreter, so closures see their own copy.
 | SET_UP | depth, slot | Store in an enclosing slot. |
 | BUILTIN | index | Push a standard function. |
 | CLOSURE | index | Capture the current environment. |
+| PUSH_MODULE | index | Push a module export map. |
 | CALL | count | Call the top value. |
 | RETURN | none | Return nil. |
 | RETURN_VALUE | none | Return the top. |
@@ -126,6 +129,23 @@ The right operand runs only when needed.
 print(0 and 1)   // prints 0
 print(1 or 2)    // prints 1
 ```
+
+## Modules
+
+A module compiles to its own function.
+The function runs the file's top-level code.
+It returns a map of the exported names.
+The `PUSH_MODULE` instruction loads a module map by index.
+A module runs once and its result is cached.
+
+An import statement compiles to a `PUSH_MODULE` followed by reads.
+The plain form reads every export into its own local.
+The alias form stores the whole map in one local.
+
+The compiled program keeps every module in one table.
+The compiler fills the table from a `module.Bundle`.
+The VM runs a module the first time an instruction asks for it.
+Module code can call other modules through the same mechanism.
 
 ## Shared runtime
 
@@ -177,3 +197,4 @@ go test ./test/ -run EnginesAgree
 - Constant assignment is rejected by the compiler.
 - `break` and `continue` inside a closure are not supported.
 - A function call carries at most 255 arguments.
+- A `PUSH_MODULE` index only fits programs with at most 65535 modules.

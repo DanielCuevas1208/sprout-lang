@@ -181,8 +181,54 @@ func TestParseErrors(t *testing.T) {
 		{"}", "unexpected '}'"},
 		{"for i range(0, 3) { }", "expected 'in'"},
 		{"let x = 1 )", "expected a statement"},
+		{"import", "expected a module path"},
+		{"import calc", "expected 'from'"},
+		{"import calc from", "expected a module path"},
+		{"export 5", "expected 'let', 'const', or 'fn'"},
 	}
 	for _, c := range cases {
 		expectErrors(t, c.src, c.want)
 	}
+}
+
+func TestImportStatement(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{
+			`import "lib/greetings.spr"`,
+			`(program import "lib/greetings.spr")`,
+		},
+		{
+			`import calc from "lib/calc.spr"`,
+			`(program import "lib/calc.spr" as calc)`,
+		},
+	}
+	for _, c := range cases {
+		expectParse(t, c.src, c.want)
+	}
+}
+
+func TestExportStatement(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{
+			"export let count = 0",
+			"(program (export let count value (int 0)))",
+		},
+		{
+			"export const pi = 3.14",
+			"(program (export const pi value (float 3.14)))",
+		},
+		{
+			"export fn greet(name) { return name }",
+			"(program (export fn greet (params name) (block (return value name))))",
+		},
+	}
+	for _, c := range cases {
+		expectParse(t, c.src, c.want)
+	}
+}
+
+func TestImportExportBlockedInBlocks(t *testing.T) {
+	expectErrors(t, "fn f() { import \"a.spr\" }", "top level")
+	expectErrors(t, "fn f() { export let x = 1 }", "top level")
+	expectErrors(t, "if true { import \"a.spr\" }", "top level")
 }

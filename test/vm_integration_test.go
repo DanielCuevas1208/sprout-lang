@@ -9,38 +9,32 @@ import (
 	"github.com/sprout-lang/sprout/internal/checker"
 	"github.com/sprout-lang/sprout/internal/compiler"
 	"github.com/sprout-lang/sprout/internal/diag"
-	"github.com/sprout-lang/sprout/internal/parser"
-	"github.com/sprout-lang/sprout/internal/source"
+	"github.com/sprout-lang/sprout/internal/module"
 	"github.com/sprout-lang/sprout/internal/vm"
 )
 
-// vmRun executes a Sprout source file through the bytecode pipeline.
+// vmRun loads path as a bundle and runs it on the bytecode virtual machine.
 //
 // It mirrors compileAndRun in integration_test.go but uses the bytecode
-// virtual machine instead of the tree-walking interpreter.
+// pipeline instead of the tree-walking interpreter.
 func vmRun(t *testing.T, path string, stdin string) (string, *vm.RunError) {
 	t.Helper()
-	text, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read %s: %v", path, err)
-	}
-	file := source.NewFile(path, string(text))
-	prog, diags := parser.Parse(file)
+	bundle, diags := module.Load(path)
 	for _, d := range diags {
 		if d.Severity == diag.SeverityError {
-			t.Fatalf("parse error in %s: %s", path, d.Message)
+			t.Fatalf("load error in %s: %s", path, d.Message)
 		}
 	}
-	if diags := checker.Check(file, prog); len(diags) > 0 {
-		t.Fatalf("check error in %s: %s", path, diags[0].Message)
+	if cdiags := checker.CheckBundle(bundle); len(cdiags) > 0 {
+		t.Fatalf("check error in %s: %s", path, cdiags[0].Message)
 	}
-	compiled, err := compiler.Compile(file, prog)
+	compiled, err := compiler.CompileBundle(bundle)
 	if err != nil {
 		t.Fatalf("compile error in %s: %s", path, err)
 	}
 	var stdout, stderr strings.Builder
 	machine := vm.NewWithIO(strings.NewReader(stdin), &stdout, &stderr)
-	_, rerr := machine.Run(file, compiled)
+	_, rerr := machine.Run(bundle.Source(), compiled)
 	return stdout.String(), rerr
 }
 

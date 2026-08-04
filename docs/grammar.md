@@ -1,6 +1,6 @@
 # Sprout Grammar
 
-This document is the formal grammar of Sprout version 0.2.
+This document is the formal grammar of Sprout version 0.3.
 
 ## Notation
 
@@ -42,8 +42,27 @@ program       := statement*
 statement     := let_decl | const_decl | fn_decl
                | if_stmt | while_stmt | for_stmt
                | return_stmt | break_stmt | continue_stmt
+               | import_stmt | export_stmt
                | expr_stmt
 ```
+
+## Modules
+
+An import loads a module. The plain form binds every export.
+The alias form binds the whole module under one name.
+
+```
+import_stmt   := "import" string
+               | "import" identifier "from" string
+```
+
+An export marks one top-level declaration as public.
+
+```
+export_stmt   := "export" ( let_decl | const_decl | fn_decl )
+```
+
+Import and export only appear at the top level of a file.
 
 ## Declarations
 

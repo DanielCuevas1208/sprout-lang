@@ -1,12 +1,15 @@
 package vm
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/sprout-lang/sprout/internal/checker"
 	"github.com/sprout-lang/sprout/internal/compiler"
 	"github.com/sprout-lang/sprout/internal/diag"
+	"github.com/sprout-lang/sprout/internal/module"
 	"github.com/sprout-lang/sprout/internal/parser"
 	"github.com/sprout-lang/sprout/internal/source"
 )
@@ -299,4 +302,125 @@ add_entry("one")
 add_entry("two")
 print(log)
 `, "[one, two]\n")
+}
+
+// writeModule writes src to a named file inside dir.
+func writeModule(t *testing.T, dir, name, src string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, name)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// runBundle loads the bundle rooted at dir/main.spr and runs it on the VM.
+func runBundle(t *testing.T, dir string) (string, *RunError) {
+	t.Helper()
+	bundle, diags := module.Load(filepath.Join(dir, "main.spr"))
+	for _, d := range diags {
+		if d.Severity == diag.SeverityError {
+			t.Fatalf("load error: %s", d.Message)
+		}
+	}
+	compiled, err := compiler.CompileBundle(bundle)
+	if err != nil {
+		t.Fatalf("compile error: %v", err)
+	}
+	var stdout, stderr strings.Builder
+	machine := NewWithIO(strings.NewReader(""), &stdout, &stderr)
+	_, rerr := machine.Run(bundle.Source(), compiled)
+	return stdout.String(), rerr
+}
+
+func TestVMBundleImports(t *testing.T) {
+	dir := t.TempDir()
+	writeModule(t, dir, "lib/g.spr",
+		"export fn greet(name) { return \"hello, \" + name }\nexport const punc = \"!\"\n")
+	writeModule(t, dir, "main.spr",
+		"import \"lib/g.spr\"\nprint(greet(\"world\") + punc)\n")
+	got, rerr := runBundle(t, dir)
+	if rerr != nil {
+		t.Fatalf("runtime error: %s", rerr.Message)
+	}
+	if got != "hello, world!\n" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestVMBundleAliasImport(t *testing.T) {
+	dir := t.TempDir()
+	writeModule(t, dir, "calc.spr",
+		"export fn add(a, b) { return a + b }\nexport fn mul(a, b) { return a * b }\n")
+	writeModule(t, dir, "main.spr",
+		"import calc from \"calc.spr\"\nprint(calc[\"add\"](2, 3))\nprint(calc[\"mul\"](3, 4))\n")
+	got, rerr := runBundle(t, dir)
+	if rerr != nil {
+		t.Fatalf("runtime error: %s", rerr.Message)
+	}
+	if got != "5\n12\n" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestVMBundleModuleRunsOnce(t *testing.T) {
+	dir := t.TempDir()
+	writeModule(t, dir, "lib/a.spr", "print(\"init a\")\nexport let x = 1\n")
+	writeModule(t, dir, "lib/b.spr", "import \"a.spr\"\nexport let y = x + 1\n")
+	writeModule(t, dir, "lib/c.spr", "import \"a.spr\"\nexport let z = x + 2\n")
+	writeModule(t, dir, "main.spr",
+		"import \"lib/b.spr\"\nimport \"lib/c.spr\"\nprint(y, z)\n")
+	got, rerr := runBundle(t, dir)
+	if rerr != nil {
+		t.Fatalf("runtime error: %s", rerr.Message)
+	}
+	if got != "init a\n2 3\n" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestVMBundleModuleClosures(t *testing.T) {
+	dir := t.TempDir()
+	writeModule(t, dir, "m.spr",
+		"let count = 0\n"+
+			"export fn next() {\n"+
+			"	count = count + 1\n"+
+			"	return count\n"+
+			"}\n")
+	writeModule(t, dir, "main.spr",
+		"import \"m.spr\"\nprint(next(), next(), next())\n")
+	got, rerr := runBundle(t, dir)
+	if rerr != nil {
+		t.Fatalf("runtime error: %s", rerr.Message)
+	}
+	if got != "1 2 3\n" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestVMBundleImportHoisted(t *testing.T) {
+	dir := t.TempDir()
+	writeModule(t, dir, "m.spr", "export let x = 7\n")
+	writeModule(t, dir, "main.spr", "print(x)\nimport \"m.spr\"\n")
+	got, rerr := runBundle(t, dir)
+	if rerr != nil {
+		t.Fatalf("runtime error: %s", rerr.Message)
+	}
+	if got != "7\n" {
+		t.Errorf("got %q", got)
+	}
+}
+
+func TestVMBundleErrorPointsAtModule(t *testing.T) {
+	dir := t.TempDir()
+	writeModule(t, dir, "m.spr", "export fn kaboom() {\n\treturn 1 / 0\n}\n")
+	writeModule(t, dir, "main.spr", "import \"m.spr\"\nprint(kaboom())\n")
+	_, rerr := runBundle(t, dir)
+	if rerr == nil {
+		t.Fatal("expected a runtime error")
+	}
+	if rerr.File == nil || !strings.HasSuffix(rerr.File.Name, "m.spr") {
+		t.Errorf("error file: %v", rerr.File)
+	}
 }

@@ -10,9 +10,13 @@ import (
 // engines use. The checker consults this list to validate programs.
 var BuiltinNames = runtime.Names
 
-// RegisterBuiltins binds the standard library into iv's globals.
+// RegisterBuiltins binds the standard library into iv's builtin scope.
+//
+// Builtins live in their own environment. The global scope and every module
+// scope use it as their parent, so modules can call the standard library
+// without seeing the entry file's top-level names.
 func RegisterBuiltins(iv *Interpreter) {
 	runtime.Register(func(b *runtime.Builtin) {
-		iv.globals.Define(b.Name, b, true)
+		iv.builtins.Define(b.Name, b, true)
 	})
 }

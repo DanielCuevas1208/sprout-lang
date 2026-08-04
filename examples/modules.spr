@@ -1,0 +1,11 @@
+// modules.spr - a program that imports a module under a name.
+//
+// The alias form binds the whole module as one map value. Names are read
+// with brackets. Names the module does not export stay hidden.
+// Run: sprout run examples/modules.spr
+
+import calc from "lib/calc.spr"
+
+print(calc["add"](2, 3))
+print(calc["mul"](3, 4))
+print("secret stays private:", calc["secret"])

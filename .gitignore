@@ -5,6 +5,9 @@
 *.test
 *.out
 
+# Bundled programs produced by "sprout build"
+*.bundle.spr
+
 # Editor and OS files
 .vscode/
 .idea/

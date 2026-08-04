@@ -11,6 +11,7 @@ import (
 	"github.com/sprout-lang/sprout/internal/ast"
 	"github.com/sprout-lang/sprout/internal/diag"
 	"github.com/sprout-lang/sprout/internal/interp"
+	"github.com/sprout-lang/sprout/internal/module"
 	"github.com/sprout-lang/sprout/internal/source"
 	"github.com/sprout-lang/sprout/internal/token"
 )
@@ -44,6 +45,41 @@ func Check(file *source.File, prog *ast.Program) []diag.Diagnostic {
 	c := &checker{file: file}
 	c.checkStmts(prog.Stmts, newScope(nil))
 	return c.diags
+}
+
+// CheckBundle reports the diagnostics found across a whole bundle.
+//
+// The global scope of each file is seeded with the names its imports bring
+// in, so imported symbols resolve like local declarations. Duplicate imports
+// and shadowing a module export with a local name are reported as errors.
+func CheckBundle(bundle *module.Bundle) []diag.Diagnostic {
+	var all []diag.Diagnostic
+	for _, f := range bundle.Files {
+		c := &checker{file: f.Source}
+		sc := newScope(nil)
+		c.seedImports(sc, f, bundle)
+		c.checkStmts(f.Prog.Stmts, sc)
+		all = append(all, c.diags...)
+	}
+	return all
+}
+
+// seedImports declares the names that f's imports bring into its global scope.
+func (c *checker) seedImports(sc *scope, f *module.File, bundle *module.Bundle) {
+	for _, stmt := range f.Prog.Stmts {
+		imp, ok := stmt.(*ast.ImportStmt)
+		if !ok || imp.Module < 0 || imp.Module >= len(bundle.Files) {
+			continue
+		}
+		target := bundle.Files[imp.Module]
+		if imp.Alias != nil {
+			c.declare(sc, imp.Alias.Name, symConst, imp.Alias.Position, "")
+			continue
+		}
+		for _, name := range target.Exports {
+			c.declare(sc, name, symConst, imp.Pos(), "")
+		}
+	}
 }
 
 type checker struct {

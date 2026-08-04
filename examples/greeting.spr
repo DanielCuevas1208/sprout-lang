@@ -1,0 +1,9 @@
+// greeting.spr - a program that imports a module.
+//
+// The import binds the exported names greet and punc into this scope.
+// Run: sprout run examples/greeting.spr
+//      sprout vm  examples/greeting.spr
+
+import "lib/greetings.spr"
+
+print(greet("world") + punc)

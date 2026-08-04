@@ -73,11 +73,12 @@ func (p *Param) End() source.Pos {
 
 // LetStmt declares a variable (IsConst == false) or a constant.
 type LetStmt struct {
-	KwPos   source.Pos
-	IsConst bool
-	Name    *Ident
-	Type    *Ident // optional type annotation
-	Value   Expr
+	KwPos    source.Pos
+	IsConst  bool
+	Exported bool // visible to importing files when true
+	Name     *Ident
+	Type     *Ident // optional type annotation
+	Value    Expr
 }
 
 func (s *LetStmt) Pos() source.Pos { return s.KwPos }
@@ -94,10 +95,11 @@ func (*LetStmt) stmt() {}
 
 // FnStmt declares a named function.
 type FnStmt struct {
-	FnPos  source.Pos
-	Name   *Ident
-	Params []*Param
-	Body   *Block
+	FnPos    source.Pos
+	Name     *Ident
+	Params   []*Param
+	Body     *Block
+	Exported bool // visible to importing files when true
 }
 
 func (s *FnStmt) Pos() source.Pos { return s.FnPos }
@@ -211,6 +213,28 @@ type ExprStmt struct {
 func (s *ExprStmt) Pos() source.Pos { return s.X.Pos() }
 func (s *ExprStmt) End() source.Pos { return s.X.End() }
 func (*ExprStmt) stmt()             {}
+
+// ImportStmt loads a module and binds its exports.
+//
+// Alias is nil for the "import \"path\"" form, which binds every exported
+// name of the module in the current scope. When Alias is set, the module is
+// bound as a single map value under that name. Module is the resolved index
+// into a module.Bundle, or -1 when resolution has not run.
+type ImportStmt struct {
+	ImportPos source.Pos
+	Path      string
+	Alias     *Ident
+	Module    int
+}
+
+func (s *ImportStmt) Pos() source.Pos { return s.ImportPos }
+func (s *ImportStmt) End() source.Pos {
+	if s.Alias != nil {
+		return s.Alias.End()
+	}
+	return source.Pos{Line: s.ImportPos.Line, Column: s.ImportPos.Column + len(s.Path) + 9}
+}
+func (*ImportStmt) stmt() {}
 
 // IntLit is an integer literal.
 type IntLit struct {
@@ -401,6 +425,9 @@ func (p *printer) node(n Node) {
 		if v.IsConst {
 			kw = "const"
 		}
+		if v.Exported {
+			kw = "export " + kw
+		}
 		p.group(kw, func() {
 			p.name(v.Name)
 			if v.Type != nil {
@@ -409,7 +436,11 @@ func (p *printer) node(n Node) {
 			p.exprField("value", v.Value)
 		})
 	case *FnStmt:
-		p.group("fn "+v.Name.Name, func() {
+		head := "fn " + v.Name.Name
+		if v.Exported {
+			head = "export " + head
+		}
+		p.group(head, func() {
 			p.params(v.Params)
 			p.block(v.Body)
 		})
@@ -446,6 +477,12 @@ func (p *printer) node(n Node) {
 		p.group("continue", nil)
 	case *ExprStmt:
 		p.node(v.X)
+	case *ImportStmt:
+		head := "import " + strconv.Quote(v.Path)
+		if v.Alias != nil {
+			head += " as " + v.Alias.Name
+		}
+		p.atom(head)
 	case *Block:
 		p.block(v)
 	case *Ident:

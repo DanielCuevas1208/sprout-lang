@@ -36,6 +36,7 @@ const (
 	OpSetUp       // uint16 depth, uint16 slot: store into an enclosing env
 	OpBuiltin     // uint16 index into the standard library
 	OpClosure     // uint16 index into Consts: capture the current env
+	OpPushModule  // uint16 index into Program.Modules: push a module map
 	OpCall        // byte count: call the top value with count arguments
 	OpReturn      // return nil
 	OpReturnValue // return the top of the stack
@@ -80,6 +81,7 @@ var opNames = map[Opcode]string{
 	OpSetUp:       "SET_UP",
 	OpBuiltin:     "BUILTIN",
 	OpClosure:     "CLOSURE",
+	OpPushModule:  "PUSH_MODULE",
 	OpCall:        "CALL",
 	OpReturn:      "RETURN",
 	OpReturnValue: "RETURN_VALUE",
@@ -121,6 +123,9 @@ type Function struct {
 	Name       string
 	FileName   string
 	ParamNames []string
+	// SourceFile is the source that produced this function, used to render
+	// runtime errors that land inside the function.
+	SourceFile *source.File
 	// NumSlots is the number of slots in the call environment.
 	// It covers parameters and function-body locals.
 	NumSlots int
@@ -146,8 +151,12 @@ func (f *Function) String() string {
 }
 
 // Program is a compiled Sprout program. Main is the entry function.
+//
+// Modules holds the compiled module functions. OpPushModule instructions in
+// any function refer to this table by index.
 type Program struct {
-	Main *Function
+	Main    *Function
+	Modules []*Function
 }
 
 // Builder assembles one function's bytecode.
@@ -159,6 +168,9 @@ type Builder struct {
 func NewBuilder(name, fileName string, paramNames []string) *Builder {
 	return &Builder{fn: &Function{Name: name, FileName: fileName, ParamNames: paramNames}}
 }
+
+// SetSourceFile records the source file that this function was compiled from.
+func (b *Builder) SetSourceFile(f *source.File) { b.fn.SourceFile = f }
 
 // Add emits an opcode with no operands and returns its offset.
 func (b *Builder) Add(op Opcode, pos source.Pos) int {
@@ -289,6 +301,9 @@ func (d *disassembler) instruction(ip int) (int, bool) {
 		} else {
 			fmt.Fprintf(&d.b, "  %d", idx)
 		}
+		return ip + 3, true
+	case OpPushModule:
+		fmt.Fprintf(&d.b, "  %d", U16(d.fn.Code, ip+1))
 		return ip + 3, true
 	case OpCall:
 		fmt.Fprintf(&d.b, "  %d", d.fn.Code[ip+1])

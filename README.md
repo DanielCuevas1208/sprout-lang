@@ -2,7 +2,7 @@
 
 Sprout is a small programming language that runs on Go.
 It ships with a lexer, a Pratt parser, and two execution engines.
-Version 0.2 adds a stack-based bytecode virtual machine.
+Version 0.3 adds a module system and a build tool.
 The interpreter and the VM share one runtime and one standard library.
 Sprout produces friendly diagnostics that point at the exact problem.
 
@@ -13,6 +13,8 @@ The codebase is structured to grow cleanly over time.
 ## Highlights
 
 - A documented grammar with a line-aware Pratt parser.
+- A module system with `import` and `export`.
+- A build tool that makes one self-contained file.
 - A bytecode compiler and a stack-based virtual machine.
 - A tree-walking interpreter that shares the runtime with the VM.
 - A disassembler for the compiled instruction stream.
@@ -72,12 +74,71 @@ hello, world
 
 Run the tour in `docs/tour.md` for a full walkthrough.
 
+## Modules
+
+Split a program into files with `import` and `export`.
+An export makes a top-level name public.
+An import binds those names into the current file.
+
+```sprout
+// lib/greetings.spr
+export fn greet(name) {
+    return "hello, " + name
+}
+```
+
+```sprout
+// main.spr
+import "lib/greetings.spr"
+
+print(greet("world"))
+```
+
+Use the `from` form to keep a module under one name.
+
+```sprout
+import calc from "lib/calc.spr"
+
+print(calc["add"](2, 3))
+```
+
+The loader resolves paths relative to the importing file.
+It reports missing modules, import cycles, and duplicate imports.
+The `modules` command shows the graph of a program.
+
+```text
+sprout modules examples/deep.spr
+```
+
+Read `docs/modules.md` for the full module guide.
+
+## Build tool
+
+The `build` command bundles a program into one file.
+
+```text
+sprout build examples/deep.spr -o dist/deep.spr
+```
+
+The output is self-contained.
+It runs anywhere without the source modules.
+
+```text
+sprout run dist/deep.spr
+sprout vm  dist/deep.spr
+```
+
+Without `-o`, the output sits next to the input.
+The name gets `.bundle.spr` added.
+
 ## Command line
 
 | Command | Purpose |
 |---------|---------|
 | `sprout run file.spr` | Runs a program on the interpreter. |
 | `sprout vm file.spr` | Runs a program on the bytecode VM. |
+| `sprout build file.spr` | Bundles a program and its imports. |
+| `sprout modules file.spr` | Shows the module graph. |
 | `sprout dis file.spr` | Shows the compiled bytecode. |
 | `sprout repl` | Starts a session. |
 | `sprout lex file.spr` | Shows the tokens. |
@@ -117,6 +178,7 @@ error: cannot divide by zero
 The checker finds problems before the program runs.
 It reports undefined names, bad constants, and misplaced control flow.
 Both engines report runtime errors in this format.
+Errors inside a module point at the module file.
 
 ## Language at a glance
 
@@ -144,7 +206,6 @@ See `docs/grammar.md` for the formal grammar.
 
 ## Bytecode virtual machine
 
-Version 0.2 adds a compiler and a stack-based virtual machine.
 The compiler turns a syntax tree into bytecode.
 The VM executes that bytecode with an operand stack and call frames.
 Both engines share the runtime, so they behave identically.
@@ -197,6 +258,9 @@ The `examples` directory holds documented programs.
 - `math.spr` shows numbers and rounding.
 - `higher_order.spr` uses map, filter, and fold.
 - `guess.spr` is an interactive game.
+- `greeting.spr` imports a module.
+- `modules.spr` imports a module under a name.
+- `deep.spr` imports a module that imports another module.
 
 Each example has a golden output in `test/golden`.
 Both engines must match the goldens.
@@ -213,6 +277,7 @@ internal/lexer   the scanner
 internal/ast     the syntax tree
 internal/parser  the Pratt parser
 internal/checker static analysis
+internal/module  module loading and bundling
 internal/runtime value semantics and the standard library
 internal/interp  the tree-walking interpreter
 internal/code    opcodes and the instruction stream
@@ -226,6 +291,10 @@ Each stage is independent.
 The parser feeds the checker and the compiler.
 The runtime is the single source of truth for both engines.
 Adding a feature means updating the runtime, then both engines stay in step.
+
+The module loader sits between the checker and the engines.
+It resolves imports into one bundle.
+Both engines run a bundle in the same order.
 
 ## Development
 
@@ -262,6 +331,7 @@ All tests pass on Go 1.22 and newer.
 | `internal/lexer` | Tokens, positions, and lexer errors. |
 | `internal/parser` | Precedence, statements, and recovery. |
 | `internal/checker` | Scope and static errors. |
+| `internal/module` | Resolution, exports, cycles, and bundling. |
 | `internal/runtime` | Arithmetic, comparison, and indexing. |
 | `internal/interp` | Evaluation, closures, and runtime errors. |
 | `internal/code` | Opcodes, the builder, and disassembly. |
@@ -272,6 +342,7 @@ All tests pass on Go 1.22 and newer.
 
 The parity tests run each program on both engines.
 The VM tests match the same goldens as the interpreter.
+Module programs must also agree on both engines.
 Tests use only the standard library. They need no network or secrets.
 
 ## Roadmap
@@ -279,7 +350,9 @@ Tests use only the standard library. They need no network or secrets.
 Version 0.2 is complete. It adds the bytecode virtual machine.
 It keeps the same parser and checker.
 
-Version 0.3 adds a module system and a build tool.
+Version 0.3 is complete. It adds the module system and the build tool.
+A program can split across files and bundle back into one.
+
 Version 0.4 adds structs, methods, and interfaces.
 Version 0.5 adds result types and pattern matching.
 Version 0.6 adds concurrency with channels.
@@ -294,6 +367,7 @@ Version 0.6 adds concurrency with channels.
 - The standard library is small by design.
 - The VM materializes a loop iterable before the loop starts.
 - `break` and `continue` inside a closure are not supported.
+- A bundled program uses the reserved names `__module_<n>` and `__m_<n>`.
 
 ## License
 

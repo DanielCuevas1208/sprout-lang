@@ -6,6 +6,7 @@ import (
 
 	"github.com/sprout-lang/sprout/internal/ast"
 	"github.com/sprout-lang/sprout/internal/object"
+	"github.com/sprout-lang/sprout/internal/source"
 )
 
 // Function is a user-defined function with its captured environment.
@@ -14,6 +15,9 @@ type Function struct {
 	Params []*ast.Param
 	Body   *ast.Block
 	Env    *Env
+	// File is the source file that defined the function. Runtime errors and
+	// stack frames use it so diagnostics point at the right module.
+	File *source.File
 }
 
 // Type reports the runtime type of a function.

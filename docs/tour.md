@@ -213,6 +213,40 @@ condition is false. It is useful for tests and examples.
 assert(2 + 2 == 4, "math still works")
 ```
 
+## Modules
+
+Version 0.3 adds a module system.
+A file can share its top-level names with other files.
+
+Mark a name as public with `export`.
+
+```sprout
+// lib/greetings.spr
+export fn greet(name) {
+    return "hello, " + name
+}
+```
+
+Load a module with `import`.
+The path is relative to the importing file.
+
+```sprout
+// main.spr
+import "lib/greetings.spr"
+
+print(greet("world"))
+```
+
+Use `from` to keep the module under one name.
+
+```sprout
+import calc from "lib/calc.spr"
+
+print(calc["add"](2, 3))
+```
+
+Read `docs/modules.md` for the full module guide.
+
 ## Interactive mode
 
 Run `sprout repl` to start a session. The session keeps its state between
@@ -230,7 +264,6 @@ sprout> :quit
 Sprout 0.2 adds a stack-based bytecode virtual machine.
 It shares the parser, the checker, and the standard library with the
 interpreter. The two engines produce the same results.
-
 Run a program on the VM.
 
 ```text
@@ -250,4 +283,5 @@ Read `docs/bytecode.md` for the full VM reference.
 Read the standard library reference in `docs/stdlib.md`.
 Read the formal grammar in `docs/grammar.md`.
 Read the bytecode virtual machine in `docs/bytecode.md`.
+Read the module guide in `docs/modules.md`.
 Run the example programs in the `examples` directory.

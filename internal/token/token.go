@@ -39,6 +39,9 @@ const (
 	AND
 	OR
 	NOT
+	IMPORT
+	EXPORT
+	FROM
 
 	// Operators and punctuation.
 	ASSIGN   // =
@@ -83,6 +86,9 @@ var keywords = map[string]Kind{
 	"and":      AND,
 	"or":       OR,
 	"not":      NOT,
+	"import":   IMPORT,
+	"export":   EXPORT,
+	"from":     FROM,
 }
 
 // Lookup returns the keyword kind for name, or IDENT.
@@ -154,6 +160,12 @@ func (k Kind) String() string {
 		return "or"
 	case NOT:
 		return "not"
+	case IMPORT:
+		return "import"
+	case EXPORT:
+		return "export"
+	case FROM:
+		return "from"
 	case ASSIGN:
 		return "="
 	case EQ:

@@ -58,7 +58,10 @@ type Parser struct {
 	toks  []token.Token
 	i     int
 	depth int // open bracket count; suppresses newline terminations
-	diags []diag.Diagnostic
+	// blockDepth counts enclosing braces of function bodies and control
+	// flow. Import and export statements are only legal at depth zero.
+	blockDepth int
+	diags      []diag.Diagnostic
 }
 
 // Parse lexes and parses file into a Program.
@@ -118,12 +121,86 @@ func (p *Parser) parseStatement() ast.Stmt {
 	case token.CONTINUE:
 		p.next()
 		return &ast.ContinueStmt{Position: t.Pos}
+	case token.IMPORT:
+		if p.blockDepth > 0 {
+			p.errorf(t.Pos, "'import' can only appear at the top level of a file")
+			p.recoverStatement()
+			return nil
+		}
+		return p.parseImport()
+	case token.EXPORT:
+		if p.blockDepth > 0 {
+			p.errorf(t.Pos, "'export' can only appear at the top level of a file")
+			p.recoverStatement()
+			return nil
+		}
+		return p.parseExport()
 	case token.RBRACE:
 		return nil
 	case token.EOF:
 		return nil
 	}
 	return p.parseExprStmt()
+}
+
+// parseImport parses one import statement.
+//
+// Both forms are accepted: "import \"path\"" and "import name from \"path\"".
+func (p *Parser) parseImport() ast.Stmt {
+	imp := p.next() // import
+
+	var alias *ast.Ident
+	if p.at(token.IDENT) {
+		alias = &ast.Ident{Name: p.cur().Lexeme, Position: p.cur().Pos}
+		p.next()
+		if !p.at(token.FROM) {
+			p.errorf(p.cur().Pos, "expected 'from' after the import name, found %s", tokenString(p.cur()))
+			p.recoverStatement()
+			return nil
+		}
+		p.next()
+	}
+
+	if !p.at(token.STRING) {
+		p.errorf(p.cur().Pos, "expected a module path after 'import', found %s", tokenString(p.cur()))
+		p.recoverStatement()
+		return nil
+	}
+	path := p.cur().Value
+	p.next()
+
+	if alias != nil {
+		return &ast.ImportStmt{ImportPos: imp.Pos, Path: path, Alias: alias, Module: -1}
+	}
+	return &ast.ImportStmt{ImportPos: imp.Pos, Path: path, Module: -1}
+}
+
+// parseExport parses an export statement that wraps a top-level declaration.
+func (p *Parser) parseExport() ast.Stmt {
+	p.next() // export
+	switch p.cur().Kind {
+	case token.LET:
+		if st, ok := p.parseLet(false).(*ast.LetStmt); ok {
+			st.Exported = true
+			return st
+		}
+		return nil
+	case token.CONST:
+		if st, ok := p.parseLet(true).(*ast.LetStmt); ok {
+			st.Exported = true
+			return st
+		}
+		return nil
+	case token.FN:
+		if st, ok := p.parseFnDecl().(*ast.FnStmt); ok {
+			st.Exported = true
+			return st
+		}
+		return nil
+	}
+	p.errorf(p.cur().Pos, "expected 'let', 'const', or 'fn' after 'export', found %s", tokenString(p.cur()))
+	p.recoverStatement()
+	return nil
 }
 
 func (p *Parser) parseLet(isConst bool) ast.Stmt {
@@ -672,7 +749,9 @@ func (p *Parser) parseBlock() *ast.Block {
 	}
 	open := p.next().Pos
 	p.open()
+	p.blockDepth++
 	stmts := p.parseStatements(true)
+	p.blockDepth--
 	p.close()
 	if !p.at(token.RBRACE) {
 		p.errorf(p.cur().Pos, "expected '}' to close the block, found %s", tokenString(p.cur()))

@@ -127,6 +127,15 @@ func TestDisassemble(t *testing.T) {
 	}
 }
 
+func TestDisassemblePushModule(t *testing.T) {
+	b := NewBuilder("main", "test.spr", nil)
+	b.AddU16(OpPushModule, 3, pos())
+	out := Disassemble(b.Finish())
+	if !strings.Contains(out, "PUSH_MODULE") || !strings.Contains(out, "3") {
+		t.Errorf("disassembly: %q", out)
+	}
+}
+
 func TestFunctionString(t *testing.T) {
 	fn := &Function{Name: "fib"}
 	if fn.String() != "<fn fib>" {

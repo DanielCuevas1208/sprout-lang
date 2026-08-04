@@ -13,6 +13,7 @@ import (
 
 	"github.com/sprout-lang/sprout/internal/ast"
 	"github.com/sprout-lang/sprout/internal/diag"
+	"github.com/sprout-lang/sprout/internal/module"
 	"github.com/sprout-lang/sprout/internal/object"
 	"github.com/sprout-lang/sprout/internal/runtime"
 	"github.com/sprout-lang/sprout/internal/source"
@@ -21,10 +22,16 @@ import (
 
 // Interpreter evaluates an AST against an environment chain.
 type Interpreter struct {
-	globals *Env
-	file    *source.File
-	ctx     runtime.Context
-	frames  []diag.Frame
+	globals  *Env
+	builtins *Env
+	file     *source.File
+	ctx      runtime.Context
+	frames   []diag.Frame
+	// bundle and modCache support the module system. bundle is set for the
+	// duration of an ExecBundle call. modCache holds each module's export
+	// map so a module runs its top-level code exactly once.
+	bundle   *module.Bundle
+	modCache map[int]object.Object
 }
 
 // New returns an interpreter wired to the process standard streams.
@@ -34,7 +41,9 @@ func New() *Interpreter {
 
 // NewWithIO returns an interpreter with explicit streams.
 func NewWithIO(stdin io.Reader, stdout, stderr io.Writer) *Interpreter {
-	iv := &Interpreter{globals: NewEnv(nil)}
+	iv := &Interpreter{}
+	iv.builtins = NewEnv(nil)
+	iv.globals = NewEnv(iv.builtins)
 	iv.ctx = runtime.Context{
 		Stdin:  stdin,
 		Stdout: stdout,
@@ -65,22 +74,58 @@ type runErr struct {
 	message string
 	pos     source.Pos
 	frames  []diag.Frame
+	file    *source.File
 }
 
 type returnSignal struct {
 	value object.Object
 	pos   source.Pos
+	file  *source.File
 }
 
-type breakSignal struct{ pos source.Pos }
+type breakSignal struct {
+	pos  source.Pos
+	file *source.File
+}
 
-type continueSignal struct{ pos source.Pos }
+type continueSignal struct {
+	pos  source.Pos
+	file *source.File
+}
 
 // Exec evaluates the whole program in a fresh call from the caller.
 //
 // It returns the final statement value (usually nil) and a *RunError if the
 // program stopped with a runtime error.
 func (iv *Interpreter) Exec(file *source.File, prog *ast.Program) (val object.Object, rerr *RunError) {
+	prevBundle, prevCache := iv.bundle, iv.modCache
+	iv.bundle = nil
+	iv.modCache = nil
+	defer func() {
+		iv.bundle = prevBundle
+		iv.modCache = prevCache
+	}()
+	return iv.exec(file, prog, false)
+}
+
+// ExecBundle evaluates a whole module bundle, starting at its entry file.
+//
+// Import statements load their modules on first use. Each module runs its
+// top-level code once and exposes its exports as a map value.
+func (iv *Interpreter) ExecBundle(bundle *module.Bundle) (val object.Object, rerr *RunError) {
+	prevBundle, prevCache := iv.bundle, iv.modCache
+	iv.bundle = bundle
+	iv.modCache = make(map[int]object.Object)
+	defer func() {
+		iv.bundle = prevBundle
+		iv.modCache = prevCache
+	}()
+	return iv.exec(bundle.Files[0].Source, bundle.Files[0].Prog, true)
+}
+
+// exec runs prog against the global scope. When hoist is true, import
+// statements run before any other statement of the file.
+func (iv *Interpreter) exec(file *source.File, prog *ast.Program, hoist bool) (val object.Object, rerr *RunError) {
 	prevFile := iv.file
 	prevFrames := iv.frames
 	iv.file = file
@@ -93,7 +138,11 @@ func (iv *Interpreter) Exec(file *source.File, prog *ast.Program) (val object.Ob
 			rerr = iv.asRunError(r)
 		}
 	}()
-	val = iv.evalStmts(prog.Stmts, iv.globals)
+	if hoist {
+		val = iv.evalTopLevel(prog.Stmts, iv.globals)
+	} else {
+		val = iv.evalStmts(prog.Stmts, iv.globals)
+	}
 	return val, nil
 }
 
@@ -120,13 +169,13 @@ func (iv *Interpreter) Eval(file *source.File, e ast.Expr) (val object.Object, r
 func (iv *Interpreter) asRunError(r any) *RunError {
 	switch s := r.(type) {
 	case *runErr:
-		return &RunError{Message: s.message, File: iv.file, Pos: s.pos, Frames: s.frames}
+		return &RunError{Message: s.message, File: s.file, Pos: s.pos, Frames: s.frames}
 	case *returnSignal:
-		return &RunError{Message: "return used outside a function", File: iv.file, Pos: s.pos}
+		return &RunError{Message: "return used outside a function", File: s.file, Pos: s.pos}
 	case *breakSignal:
-		return &RunError{Message: "break used outside a loop", File: iv.file, Pos: s.pos}
+		return &RunError{Message: "break used outside a loop", File: s.file, Pos: s.pos}
 	case *continueSignal:
-		return &RunError{Message: "continue used outside a loop", File: iv.file, Pos: s.pos}
+		return &RunError{Message: "continue used outside a loop", File: s.file, Pos: s.pos}
 	default:
 		panic(r)
 	}
@@ -138,7 +187,26 @@ func (iv *Interpreter) raise(message string, pos source.Pos) {
 		message: message,
 		pos:     pos,
 		frames:  append([]diag.Frame(nil), iv.frames...),
+		file:    iv.file,
 	})
+}
+
+// evalTopLevel evaluates a statement list with its import statements hoisted
+// to the front, so a module loads before any statement that uses its names.
+func (iv *Interpreter) evalTopLevel(stmts []ast.Stmt, env *Env) object.Object {
+	var val object.Object = object.NilValue
+	for _, s := range stmts {
+		if _, ok := s.(*ast.ImportStmt); ok {
+			val = iv.evalStmt(s, env)
+		}
+	}
+	for _, s := range stmts {
+		if _, ok := s.(*ast.ImportStmt); ok {
+			continue
+		}
+		val = iv.evalStmt(s, env)
+	}
+	return val
 }
 
 func (iv *Interpreter) evalStmts(stmts []ast.Stmt, env *Env) object.Object {
@@ -169,7 +237,7 @@ func (iv *Interpreter) evalStmt(s ast.Stmt, env *Env) object.Object {
 		return object.NilValue
 
 	case *ast.FnStmt:
-		fn := &Function{Name: n.Name.Name, Params: n.Params, Body: n.Body, Env: env}
+		fn := &Function{Name: n.Name.Name, Params: n.Params, Body: n.Body, Env: env, File: iv.file}
 		env.Define(n.Name.Name, fn, true)
 		return object.NilValue
 
@@ -181,13 +249,16 @@ func (iv *Interpreter) evalStmt(s ast.Stmt, env *Env) object.Object {
 		if n.Value != nil {
 			value = iv.evalExpr(n.Value, env)
 		}
-		panic(&returnSignal{value: value, pos: n.ReturnPos})
+		panic(&returnSignal{value: value, pos: n.ReturnPos, file: iv.file})
 
 	case *ast.BreakStmt:
-		panic(&breakSignal{pos: n.Position})
+		panic(&breakSignal{pos: n.Position, file: iv.file})
 
 	case *ast.ContinueStmt:
-		panic(&continueSignal{pos: n.Position})
+		panic(&continueSignal{pos: n.Position, file: iv.file})
+
+	case *ast.ImportStmt:
+		return iv.evalImport(n, env)
 
 	case *ast.IfStmt:
 		if runtime.Truthy(iv.evalExpr(n.Cond, env)) {
@@ -230,6 +301,63 @@ func (iv *Interpreter) evalStmt(s ast.Stmt, env *Env) object.Object {
 	}
 	iv.raise("unsupported statement", s.Pos())
 	return nil
+}
+
+// evalImport loads a module and binds its exports into env.
+//
+// The alias form binds the module as one map value. The plain form binds
+// every exported name directly, mirroring the compiler's behavior.
+func (iv *Interpreter) evalImport(n *ast.ImportStmt, env *Env) object.Object {
+	if iv.bundle == nil {
+		iv.raise("'import' is not available in this context", n.Pos())
+	}
+	if n.Module < 0 || n.Module >= len(iv.bundle.Files) {
+		iv.raise("internal error: unresolved import '"+n.Path+"'", n.Pos())
+	}
+	mod := iv.bundle.Files[n.Module]
+	m, err := iv.loadModule(mod)
+	if err != nil {
+		iv.raise(err.Error(), n.Pos())
+	}
+	if n.Alias != nil {
+		env.Define(n.Alias.Name, m, true)
+		return object.NilValue
+	}
+	for _, name := range mod.Exports {
+		env.Define(name, m.Vals[name], true)
+	}
+	return object.NilValue
+}
+
+// loadModule evaluates a module's top-level code and returns its exports.
+//
+// The result is cached, so a module is initialized exactly once even when
+// several files import it. A module runs in an environment whose parent is
+// the builtin scope, so it never sees another module's globals.
+func (iv *Interpreter) loadModule(mod *module.File) (*object.Map, error) {
+	if m, ok := iv.modCache[mod.Index]; ok {
+		return m.(*object.Map), nil
+	}
+	prevFile := iv.file
+	prevFrames := iv.frames
+	iv.file = mod.Source
+	iv.frames = nil
+	defer func() {
+		iv.file = prevFile
+		iv.frames = prevFrames
+	}()
+	moduleEnv := NewEnv(iv.builtins)
+	iv.evalTopLevel(mod.Prog.Stmts, moduleEnv)
+	m := &object.Map{Vals: make(map[string]object.Object)}
+	for _, name := range mod.Exports {
+		v, err := moduleEnv.Get(name)
+		if err != nil {
+			return nil, err
+		}
+		m.Set(name, v)
+	}
+	iv.modCache[mod.Index] = m
+	return m, nil
 }
 
 // runLoopBody executes a loop body, turning break and continue signals into
@@ -314,7 +442,7 @@ func (iv *Interpreter) evalExpr(e ast.Expr, env *Env) object.Object {
 		return v
 
 	case *ast.FnExpr:
-		return &Function{Params: n.Params, Body: n.Body, Env: env}
+		return &Function{Params: n.Params, Body: n.Body, Env: env, File: iv.file}
 	}
 	iv.raise("unsupported expression", e.Pos())
 	return nil
@@ -445,6 +573,9 @@ func (iv *Interpreter) call(callee object.Object, args []object.Object, pos sour
 		}
 		iv.pushFrame(fn.Name, pos)
 		defer iv.popFrame()
+		prevFile := iv.file
+		iv.file = fn.File
+		defer func() { iv.file = prevFile }()
 		defer func() {
 			if r := recover(); r != nil {
 				if rs, ok := r.(*returnSignal); ok {

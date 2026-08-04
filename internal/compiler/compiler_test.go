@@ -1,11 +1,14 @@
 package compiler
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/sprout-lang/sprout/internal/code"
 	"github.com/sprout-lang/sprout/internal/diag"
+	"github.com/sprout-lang/sprout/internal/module"
 	"github.com/sprout-lang/sprout/internal/parser"
 	"github.com/sprout-lang/sprout/internal/source"
 )
@@ -46,8 +49,9 @@ func nextOffset(b []byte, ip int) int {
 	case code.OpCall:
 		return ip + 2
 	case code.OpPushConst, code.OpNewEnv, code.OpGetLocal, code.OpSetLocal,
-		code.OpBuiltin, code.OpClosure, code.OpJump, code.OpJumpIfFalse,
-		code.OpJumpIfTrue, code.OpBuildList, code.OpBuildMap, code.OpIterNext:
+		code.OpBuiltin, code.OpClosure, code.OpPushModule, code.OpJump,
+		code.OpJumpIfFalse, code.OpJumpIfTrue, code.OpBuildList, code.OpBuildMap,
+		code.OpIterNext:
 		return ip + 3
 	default:
 		return ip + 1
@@ -330,5 +334,88 @@ func TestCompileASTPositionsTracked(t *testing.T) {
 			t.Errorf("missing position for instruction at offset %d", ip)
 		}
 		ip = nextOffset(main.Code, ip)
+	}
+}
+
+// writeModule writes src to a named file inside dir.
+func writeModule(t *testing.T, dir, name, src string) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(filepath.Join(dir, name)), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, name), []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// compileBundleDir loads and compiles the bundle rooted at dir/main.spr.
+func compileBundleDir(t *testing.T, dir string) *code.Program {
+	t.Helper()
+	bundle, diags := module.Load(filepath.Join(dir, "main.spr"))
+	for _, d := range diags {
+		if d.Severity == diag.SeverityError {
+			t.Fatalf("load error: %s", d.Message)
+		}
+	}
+	prog, err := CompileBundle(bundle)
+	if err != nil {
+		t.Fatalf("compile error: %v", err)
+	}
+	return prog
+}
+
+func TestCompileBundleModulesCompiled(t *testing.T) {
+	dir := t.TempDir()
+	writeModule(t, dir, "lib/g.spr",
+		"export fn greet(name) { return name }\nexport const punc = \"!\"\n")
+	writeModule(t, dir, "main.spr",
+		"import \"lib/g.spr\"\nprint(greet(\"x\"))\n")
+	prog := compileBundleDir(t, dir)
+
+	if len(prog.Modules) != 1 {
+		t.Fatalf("module count: %d, want 1", len(prog.Modules))
+	}
+	mod := prog.Modules[0]
+	if mod.FileName != filepath.Join(dir, "lib", "g.spr") {
+		t.Errorf("module file: %q", mod.FileName)
+	}
+	// The module function builds a two-entry export map and returns it.
+	if got := opCount(t, mod, code.OpBuildMap); got != 1 {
+		t.Errorf("module build map count: %d", got)
+	}
+	if got := opCount(t, mod, code.OpReturnValue); got != 1 {
+		t.Errorf("module return value count: %d", got)
+	}
+	// The main function loads the module and reads two exports from it.
+	if got := opCount(t, prog.Main, code.OpPushModule); got != 1 {
+		t.Errorf("main push module count: %d", got)
+	}
+	if got := opCount(t, prog.Main, code.OpGetIndex); got != 2 {
+		t.Errorf("main get index count: %d", got)
+	}
+}
+
+func TestCompileBundleModuleWithNoExports(t *testing.T) {
+	dir := t.TempDir()
+	writeModule(t, dir, "side.spr", "print(\"side effect\")\n")
+	writeModule(t, dir, "main.spr", "import \"side.spr\"\nprint(\"main\")\n")
+	prog := compileBundleDir(t, dir)
+	if len(prog.Modules) != 1 {
+		t.Fatalf("module count: %d, want 1", len(prog.Modules))
+	}
+	if got := opCount(t, prog.Modules[0], code.OpBuildMap); got != 1 {
+		t.Errorf("empty module should still build a map, got %d", got)
+	}
+}
+
+func TestCompileBundleAliasImport(t *testing.T) {
+	dir := t.TempDir()
+	writeModule(t, dir, "calc.spr", "export fn add(a, b) { return a + b }\n")
+	writeModule(t, dir, "main.spr",
+		"import calc from \"calc.spr\"\nprint(calc[\"add\"](1, 2))\n")
+	prog := compileBundleDir(t, dir)
+	// The alias import loads the module once and stores it in one local.
+	if got := opCount(t, prog.Main, code.OpPushModule); got != 1 {
+		t.Errorf("push module count: %d", got)
 	}
 }

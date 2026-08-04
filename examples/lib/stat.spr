@@ -1,0 +1,11 @@
+// stat.spr - a module that imports another module.
+//
+// A module can use the exports of the modules it imports. The import is
+// resolved relative to this file, so it finds greetings.spr in the same
+// directory.
+
+import "greetings.spr"
+
+export fn shout(name) {
+    return greet(name) + punc
+}

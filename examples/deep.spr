@@ -1,0 +1,10 @@
+// deep.spr - a program whose module imports another module.
+//
+// stat.spr imports greetings.spr. The loader resolves the chain, so deep.spr
+// can call shout even though it never names greetings.spr itself.
+// Run: sprout run examples/deep.spr
+//      sprout vm  examples/deep.spr
+
+import "lib/stat.spr"
+
+print(shout("deep"))

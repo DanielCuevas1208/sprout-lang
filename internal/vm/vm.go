@@ -63,6 +63,7 @@ type frame struct {
 	cl      *Closure
 	fn      *code.Function
 	env     *Env
+	file    *source.File
 	ip      int
 	base    int
 	callPos source.Pos
@@ -91,6 +92,7 @@ type vmErr struct {
 	msg    string
 	pos    source.Pos
 	frames []diag.Frame
+	file   *source.File
 }
 
 // VM executes compiled Sprout programs.
@@ -98,6 +100,10 @@ type VM struct {
 	ctx    runtime.Context
 	stack  []object.Object
 	frames []*frame
+	// prog is the compiled program currently running. It is set during Run.
+	prog *code.Program
+	// modules caches each module's export map, so a module initializes once.
+	modules []object.Object
 }
 
 // New returns a VM wired to the process standard streams.
@@ -125,14 +131,19 @@ func NewWithIO(stdin io.Reader, stdout, stderr io.Writer) *VM {
 // *RunError when the program stops with a runtime error.
 func (vm *VM) Run(file *source.File, prog *code.Program) (val object.Object, rerr *RunError) {
 	prevStack, prevFrames := vm.stack, vm.frames
+	prevProg, prevModules := vm.prog, vm.modules
 	vm.stack = vm.stack[:0]
 	vm.frames = vm.frames[:0]
+	vm.prog = prog
+	vm.modules = make([]object.Object, len(prog.Modules))
 	defer func() {
 		vm.stack = prevStack
 		vm.frames = prevFrames
+		vm.prog = prevProg
+		vm.modules = prevModules
 		if r := recover(); r != nil {
 			if e, ok := r.(*vmErr); ok {
-				val, rerr = nil, &RunError{Message: e.msg, File: file, Pos: e.pos, Frames: e.frames}
+				val, rerr = nil, &RunError{Message: e.msg, File: e.file, Pos: e.pos, Frames: e.frames}
 				return
 			}
 			panic(r)
@@ -144,6 +155,7 @@ func (vm *VM) Run(file *source.File, prog *code.Program) (val object.Object, rer
 	vm.frames = append(vm.frames, &frame{
 		fn:   main,
 		env:  env,
+		file: file,
 		ip:   0,
 		base: 0,
 	})
@@ -153,15 +165,30 @@ func (vm *VM) Run(file *source.File, prog *code.Program) (val object.Object, rer
 
 // failAtPos aborts execution with a runtime error.
 func (vm *VM) failAtPos(msg string, pos source.Pos) {
-	panic(&vmErr{msg: msg, pos: pos, frames: vm.stackTrace()})
+	panic(&vmErr{msg: msg, pos: pos, frames: vm.stackTrace(), file: vm.currentFile()})
+}
+
+// currentFile returns the source file of the innermost active frame, or nil.
+func (vm *VM) currentFile() *source.File {
+	if len(vm.frames) == 0 {
+		return nil
+	}
+	return vm.frames[len(vm.frames)-1].file
 }
 
 // stackTrace builds the call stack, skipping the entry frame.
+//
+// Each frame names the function and points at the call site in the calling
+// function's file.
 func (vm *VM) stackTrace() []diag.Frame {
 	frames := make([]diag.Frame, 0, len(vm.frames)-1)
 	for i := 1; i < len(vm.frames); i++ {
 		fr := vm.frames[i]
-		frames = append(frames, diag.Frame{Name: fr.fn.Name, FileName: fr.fn.FileName, Pos: fr.callPos})
+		callerFile := ""
+		if caller := vm.frames[i-1]; caller != nil && caller.file != nil {
+			callerFile = caller.file.Name
+		}
+		frames = append(frames, diag.Frame{Name: fr.fn.Name, FileName: callerFile, Pos: fr.callPos})
 	}
 	return frames
 }
@@ -183,6 +210,22 @@ func (vm *VM) envAt(fr *frame, depth int) *Env {
 	return e
 }
 
+// loadModule returns the export map of the module at idx, running the
+// module's code the first time it is requested.
+//
+// A module runs as a closure call with no captured environment, so it can
+// only see its own names and the standard library. Its return value is a map
+// of its exported names. The result is cached for the rest of the run.
+func (vm *VM) loadModule(idx int, pos source.Pos) object.Object {
+	if vm.modules[idx] != nil {
+		return vm.modules[idx]
+	}
+	closure := &Closure{fn: vm.prog.Modules[idx], env: nil}
+	result := vm.callValue(closure, nil, pos)
+	vm.modules[idx] = result
+	return result
+}
+
 // callValue invokes a closure or builtin with the given arguments.
 func (vm *VM) callValue(callee object.Object, args []object.Object, pos source.Pos) object.Object {
 	switch c := callee.(type) {
@@ -200,6 +243,7 @@ func (vm *VM) callValue(callee object.Object, args []object.Object, pos source.P
 			cl:      c,
 			fn:      c.fn,
 			env:     env,
+			file:    c.fn.SourceFile,
 			ip:      0,
 			base:    len(vm.stack),
 			callPos: pos,
@@ -286,6 +330,11 @@ func (vm *VM) runFrames(until int) object.Object {
 			f := fn.Consts[idx].(*code.Function)
 			vm.push(&Closure{fn: f, env: fr.env})
 			fr.ip += 3
+		case code.OpPushModule:
+			pos := fr.pos()
+			idx := int(code.U16(fn.Code, fr.ip+1))
+			fr.ip += 3
+			vm.push(vm.loadModule(idx, pos))
 		case code.OpCall:
 			n := int(fn.Code[fr.ip+1])
 			pos := fr.pos()

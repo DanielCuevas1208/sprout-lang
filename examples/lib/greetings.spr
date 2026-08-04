@@ -1,0 +1,9 @@
+// greetings.spr - a small module with two exports.
+//
+// Other programs import this file and use greet and punc.
+
+export fn greet(name) {
+    return "hello, " + name
+}
+
+export const punc = "!"

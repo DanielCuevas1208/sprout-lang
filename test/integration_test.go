@@ -10,30 +10,24 @@ import (
 	"github.com/sprout-lang/sprout/internal/checker"
 	"github.com/sprout-lang/sprout/internal/diag"
 	"github.com/sprout-lang/sprout/internal/interp"
-	"github.com/sprout-lang/sprout/internal/parser"
-	"github.com/sprout-lang/sprout/internal/source"
+	"github.com/sprout-lang/sprout/internal/module"
 )
 
-// compileAndRun runs a Sprout source through the full pipeline.
+// compileAndRun loads path as a bundle and runs it on the interpreter.
 func compileAndRun(t *testing.T, path string, stdin string) (string, *interp.RunError) {
 	t.Helper()
-	text, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatalf("read %s: %v", path, err)
-	}
-	file := source.NewFile(path, string(text))
-	prog, diags := parser.Parse(file)
+	bundle, diags := module.Load(path)
 	for _, d := range diags {
 		if d.Severity == diag.SeverityError {
-			t.Fatalf("parse error in %s: %s", path, d.Message)
+			t.Fatalf("load error in %s: %s", path, d.Message)
 		}
 	}
-	if diags := checker.Check(file, prog); len(diags) > 0 {
-		t.Fatalf("check error in %s: %s", path, diags[0].Message)
+	if cdiags := checker.CheckBundle(bundle); len(cdiags) > 0 {
+		t.Fatalf("check error in %s: %s", path, cdiags[0].Message)
 	}
 	var stdout, stderr strings.Builder
 	iv := interp.NewWithIO(strings.NewReader(stdin), &stdout, &stderr)
-	_, rerr := iv.Exec(file, prog)
+	_, rerr := iv.ExecBundle(bundle)
 	return stdout.String(), rerr
 }
 

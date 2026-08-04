@@ -1,0 +1,13 @@
+// calc.spr - a module with arithmetic helpers.
+//
+// The name secret stays private. Importing programs cannot see it.
+
+export fn add(a, b) {
+    return a + b
+}
+
+export fn mul(a, b) {
+    return a * b
+}
+
+const secret = 42

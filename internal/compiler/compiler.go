@@ -15,6 +15,7 @@ import (
 
 	"github.com/sprout-lang/sprout/internal/ast"
 	"github.com/sprout-lang/sprout/internal/code"
+	"github.com/sprout-lang/sprout/internal/module"
 	"github.com/sprout-lang/sprout/internal/object"
 	"github.com/sprout-lang/sprout/internal/runtime"
 	"github.com/sprout-lang/sprout/internal/source"
@@ -69,6 +70,17 @@ type Compiler struct {
 	loops []loopInfo
 	// builtins maps a standard library name to its index.
 	builtins map[string]uint16
+	// imports maps an import path text to its module slot and export names.
+	// It is nil for single-file compilation.
+	imports map[string]importInfo
+}
+
+// importInfo describes one resolved import in the current file.
+type importInfo struct {
+	// module is the index of the compiled module in code.Program.Modules.
+	module uint16
+	// exports lists the names the module provides.
+	exports []string
 }
 
 // Compile translates prog into a runnable program.
@@ -84,10 +96,170 @@ func Compile(file *source.File, prog *ast.Program) (p *code.Program, err error) 
 		}
 	}()
 	c.pushFn(code.NewBuilder("<main>", file.Name, nil), newScope(nil))
+	c.b().SetSourceFile(file)
 	c.compileStmts(prog.Stmts)
 	c.b().Add(code.OpReturn, endPos(prog.Stmts))
 	main := c.finishFn()
 	return &code.Program{Main: main}, nil
+}
+
+// CompileBundle compiles a whole module bundle into a runnable program.
+//
+// Every module becomes a function that returns a map of its exports. The
+// entry file becomes the <main> function. Each module is compiled exactly
+// once and referenced by index from its import sites.
+func CompileBundle(bundle *module.Bundle) (p *code.Program, err error) {
+	// moduleSlot maps a bundle file index to its slot in Program.Modules.
+	moduleSlot := make(map[int]uint16, len(bundle.Modules))
+	for slot, fi := range bundle.Modules {
+		moduleSlot[fi] = uint16(slot)
+	}
+
+	importsByFile := make(map[int]map[string]importInfo, len(bundle.Files))
+	for _, f := range bundle.Files {
+		info := make(map[string]importInfo)
+		for _, stmt := range f.Prog.Stmts {
+			imp, ok := stmt.(*ast.ImportStmt)
+			if !ok || imp.Module < 0 {
+				continue
+			}
+			slot, ok := moduleSlot[imp.Module]
+			if !ok {
+				continue
+			}
+			info[imp.Path] = importInfo{module: slot, exports: bundle.Files[imp.Module].Exports}
+		}
+		importsByFile[f.Index] = info
+	}
+
+	p = &code.Program{}
+	for _, fi := range bundle.Modules {
+		mod, cerr := compileModule(bundle.Files[fi], importsByFile[fi])
+		if cerr != nil {
+			return nil, cerr
+		}
+		p.Modules = append(p.Modules, mod)
+	}
+	main, cerr := compileFile(bundle.Files[0], "<main>", importsByFile[0], true)
+	if cerr != nil {
+		return nil, cerr
+	}
+	p.Main = main
+	return p, nil
+}
+
+// compileModule compiles one module file into a function.
+func compileModule(f *module.File, imports map[string]importInfo) (fn *code.Function, err error) {
+	return compileFile(f, f.Path, imports, false)
+}
+
+// compileFile compiles one file of a bundle into a function.
+//
+// When isMain is false, the function ends by returning a map of the file's
+// exports. Import statements are hoisted to the start of the function, so a
+// module is fully loaded before any statement of the file runs.
+func compileFile(f *module.File, name string, imports map[string]importInfo, isMain bool) (fn *code.Function, err error) {
+	c := &Compiler{file: f.Source, builtins: builtinIndex(), imports: imports}
+	defer func() {
+		if r := recover(); r != nil {
+			if ce, ok := r.(*compileError); ok {
+				fn, err = nil, ce
+				return
+			}
+			panic(r)
+		}
+	}()
+	c.pushFn(code.NewBuilder(name, f.Source.Name, nil), newScope(nil))
+	c.b().SetSourceFile(f.Source)
+
+	// Split imports from the rest of the file.
+	var body []ast.Stmt
+	for _, s := range f.Prog.Stmts {
+		if _, ok := s.(*ast.ImportStmt); ok {
+			continue
+		}
+		body = append(body, s)
+	}
+
+	// Imported names and function names are pre-declared so any statement
+	// can reference them. This mirrors the checker.
+	for _, s := range f.Prog.Stmts {
+		if imp, ok := s.(*ast.ImportStmt); ok {
+			c.declareImportNames(imp)
+		}
+	}
+	for _, s := range body {
+		if fndecl, ok := s.(*ast.FnStmt); ok {
+			c.declare(fndecl.Name.Name, true, fndecl.Name.Position)
+		}
+	}
+
+	// Module loading is hoisted ahead of all other statements.
+	for _, s := range f.Prog.Stmts {
+		if imp, ok := s.(*ast.ImportStmt); ok {
+			c.compileImport(imp)
+		}
+	}
+	for _, s := range body {
+		c.compileStmt(s)
+	}
+
+	if isMain {
+		c.b().Add(code.OpReturn, endPos(f.Prog.Stmts))
+	} else {
+		c.compileModuleExports(f)
+	}
+	return c.finishFn(), nil
+}
+
+// declareImportNames declares the names an import statement will bind.
+func (c *Compiler) declareImportNames(imp *ast.ImportStmt) {
+	if imp.Alias != nil {
+		c.declare(imp.Alias.Name, true, imp.Alias.Position)
+		return
+	}
+	info, ok := c.imports[imp.Path]
+	if !ok {
+		return
+	}
+	for _, name := range info.exports {
+		c.declare(name, true, imp.Pos())
+	}
+}
+
+// compileImport emits the instructions that load a module and bind its names.
+func (c *Compiler) compileImport(imp *ast.ImportStmt) {
+	info, ok := c.imports[imp.Path]
+	if !ok {
+		c.failf(imp.Pos(), "internal error: unresolved import '%s'", imp.Path)
+	}
+	if imp.Alias != nil {
+		c.b().AddU16(code.OpPushModule, info.module, imp.Pos())
+		c.emitSet(imp.Alias.Name, imp.Alias.Position)
+		return
+	}
+	c.b().AddU16(code.OpPushModule, info.module, imp.Pos())
+	for _, name := range info.exports {
+		c.b().Add(code.OpDup, imp.Pos())
+		c.b().AddU16(code.OpPushConst, c.b().Const(object.Str{Value: name}), imp.Pos())
+		c.b().Add(code.OpGetIndex, imp.Pos())
+		c.emitSet(name, imp.Pos())
+	}
+	c.b().Add(code.OpPop, imp.Pos())
+}
+
+// compileModuleExports emits the instructions that return a module's exports.
+//
+// Each exported name is read from its slot and gathered into a map. The map
+// becomes the return value of the module function.
+func (c *Compiler) compileModuleExports(f *module.File) {
+	pos := endPos(f.Prog.Stmts)
+	for _, name := range f.Exports {
+		c.b().AddU16(code.OpPushConst, c.b().Const(object.Str{Value: name}), pos)
+		c.emitGet(name, pos)
+	}
+	c.b().AddU16(code.OpBuildMap, uint16(len(f.Exports)), pos)
+	c.b().Add(code.OpReturnValue, pos)
 }
 
 // compileError is the panic signal for internal compiler failures.
@@ -153,7 +325,9 @@ func (c *Compiler) enterFn(name string, params []*ast.Param, body *ast.Block) ui
 	}
 	prevLoops := c.loops
 	c.loops = nil
-	c.pushFn(code.NewBuilder(name, c.file.Name, paramNames), sc)
+	b := code.NewBuilder(name, c.file.Name, paramNames)
+	b.SetSourceFile(c.file)
+	c.pushFn(b, sc)
 	c.compileStmts(body.Stmts)
 	c.b().Add(code.OpReturn, endPos(body.Stmts))
 	fn := c.finishFn()
@@ -268,6 +442,12 @@ func (c *Compiler) compileStmt(s ast.Stmt) {
 
 	case *ast.ForInStmt:
 		c.compileForIn(n)
+
+	case *ast.ImportStmt:
+		// Import statements are hoisted by compileFile and never reach
+		// compileStmt. Reaching this case means the program was compiled
+		// through the single-file path, which has no module resolution.
+		c.failf(n.Pos(), "internal error: import outside a module bundle")
 
 	default:
 		c.failf(s.Pos(), "internal error: unsupported statement")
