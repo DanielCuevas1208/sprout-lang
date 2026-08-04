@@ -1,6 +1,6 @@
 # Standard Library
 
-This page lists the built-in functions of Sprout 0.4.
+This page lists the built-in functions of Sprout 0.5.
 They are available in every program without an import.
 
 ## Output
@@ -85,6 +85,21 @@ Map keys are strings. Maps keep insertion order.
 | `ceil(n)` | Rounds up to an integer. |
 | `round(n)` | Rounds to the nearest integer. |
 | `sqrt(n)` | Returns the square root. |
+
+## Results
+
+| Function | Returns |
+|----------|---------|
+| `ok(x)` | An ok result that holds x. |
+| `err(msg)` | An error result that holds msg. |
+| `is_ok(r)` | true when r is an ok result. |
+| `is_err(r)` | true when r is an error result. |
+| `unwrap(r)` | The ok value. Stops on an error. |
+| `unwrap_or(r, fallback)` | The ok value, or fallback. |
+
+`ok` holds any value. `err` holds a message string.
+`unwrap` stops the program when the result is an error.
+See `docs/results.md` for the full reference.
 
 ## Modules
 

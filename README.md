@@ -5,6 +5,7 @@ It ships with a lexer, a Pratt parser, and two execution engines.
 Version 0.2 added a stack-based bytecode virtual machine.
 Version 0.3 added file-based modules and a build tool.
 Version 0.4 adds structs, methods, and interfaces.
+Version 0.5 adds result types and pattern matching.
 The interpreter and the VM share one runtime and one standard library.
 Sprout produces friendly diagnostics that point at the exact problem.
 
@@ -16,6 +17,8 @@ The codebase is structured to grow cleanly over time.
 
 - A documented grammar with a line-aware Pratt parser.
 - Structs with methods and interface contracts.
+- Result values with `ok` and `err`.
+- A `match` expression with wildcard and variable patterns.
 - A bytecode compiler and a stack-based virtual machine.
 - A tree-walking interpreter that shares the runtime with the VM.
 - A disassembler for the compiled instruction stream.
@@ -197,6 +200,43 @@ A method body reads its receiver through `self`.
 The checker verifies interface satisfaction before a program runs.
 See `docs/structs.md` for the full reference.
 
+## Results and pattern matching
+
+Version 0.5 adds result types and pattern matching.
+A result carries a value or an error message.
+Sprout has no exceptions.
+A function that can fail returns a result.
+
+```sprout
+fn safe_div(a, b) {
+    if b == 0 {
+        return err("division by zero")
+    }
+    return ok(a / b)
+}
+
+print(safe_div(10, 2))   // ok(5)
+```
+
+Use `match` to take a value apart.
+Arms run in order. The first match wins.
+The `_` pattern matches any value.
+
+```sprout
+let r = safe_div(10, 0)
+
+print(match r {
+    ok(v) => { "result: " + str(v) },
+    err(m) => { "failed: " + m },
+    _ => { "unknown" },
+})
+```
+
+Match works on any value, not just results.
+A pattern can bind one name, or test a literal.
+A match must end with a catch-all arm.
+See `docs/results.md` for the full reference.
+
 ## Modules
 
 A module is a separate Sprout file.
@@ -275,6 +315,7 @@ The VM executes that bytecode with an operand stack and call frames.
 Both engines share the runtime, so they behave identically.
 Version 0.3 runs modules on both engines.
 Version 0.4 runs structs and methods on both engines.
+Version 0.5 runs results and match on both engines.
 
 The `dis` command shows the compiled instructions.
 
@@ -303,6 +344,7 @@ It covers output, conversion, lists, maps, strings, and numbers.
 It also provides `assert` for tests and examples.
 Version 0.3 adds `module` for building module values.
 Version 0.4 adds no new builtins. The `type` function reports structs.
+Version 0.5 adds `ok`, `err`, `is_ok`, `is_err`, `unwrap`, and `unwrap_or`.
 
 ```sprout
 let nums = [1, 2, 3, 4]
@@ -326,6 +368,7 @@ The `examples` directory holds documented programs.
 - `math.spr` shows numbers and rounding.
 - `higher_order.spr` uses map, filter, and fold.
 - `structs.spr` uses structs, methods, and interfaces.
+- `results.spr` uses results and pattern matching.
 - `guess.spr` is an interactive game.
 - `project` is a multi-file module project.
 
@@ -401,7 +444,7 @@ All tests pass on Go 1.22 and newer.
 | `internal/ast` | Source printer round trips. |
 | `internal/module` | Loading, resolution, cycles, and manifests. |
 | `internal/build` | Bundle output and reserved names. |
-| `internal/runtime` | Arithmetic, comparison, indexing, and members. |
+| `internal/runtime` | Arithmetic, comparison, indexing, members, and results. |
 | `internal/interp` | Evaluation, closures, structs, and runtime errors. |
 | `internal/code` | Opcodes, the builder, and disassembly. |
 | `internal/compiler` | Bytecode for expressions, structs, and control flow. |
@@ -412,6 +455,7 @@ All tests pass on Go 1.22 and newer.
 The parity tests run each program on both engines.
 The VM tests match the same goldens as the interpreter.
 Module tests run projects and bundles on both engines.
+Match programs run on both engines and must agree.
 Tests use only the standard library. They need no network or secrets.
 
 ## Roadmap
@@ -427,7 +471,12 @@ Version 0.4 is complete. It added structs, methods, and interfaces.
 Structs and methods run on both engines.
 Interfaces are a static contract checked before a program runs.
 
-Version 0.5 adds result types and pattern matching.
+Version 0.5 is complete. It added result types and pattern matching.
+A function can return `ok` or `err`.
+The `match` expression tests a value against patterns.
+It binds pattern names in the arm that wins.
+Results and match run on both engines.
+
 Version 0.6 adds concurrency with channels.
 
 ## Limitations
@@ -444,6 +493,9 @@ Version 0.6 adds concurrency with channels.
 - `break` and `continue` inside a closure are not supported.
 - Module resolution is file based. There is no package registry.
 - A bundle reprints module bodies. It does not compress them.
+- A match arm is a block. It cannot be a bare expression.
+- A pattern binds at most one variable.
+- Match patterns cover literals, names, and results only.
 
 ## License
 

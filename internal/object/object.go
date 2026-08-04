@@ -24,6 +24,7 @@ const (
 	TypeStruct   Type = "struct"
 	TypeStructTp Type = "struct type"
 	TypeMethod   Type = "method"
+	TypeResult   Type = "result"
 )
 
 func (t Type) String() string { return string(t) }
@@ -323,6 +324,32 @@ type BoundMethod struct {
 func (m *BoundMethod) Type() Type { return TypeMethod }
 func (m *BoundMethod) String() string {
 	return "<method " + m.Name + ">"
+}
+
+// Result is a value that carries either a success value or an error message.
+//
+// Sprout has no exceptions. A function that can fail returns a Result. The
+// ok() and err() builtins build results, and a match expression takes them
+// apart. An ok result holds a value; an error result holds a message string.
+// Results are immutable and compare by value.
+type Result struct {
+	Ok      bool
+	Value   Object
+	Message string
+}
+
+func (r Result) Type() Type { return TypeResult }
+func (r Result) String() string {
+	if r.Ok {
+		return "ok(" + r.Value.String() + ")"
+	}
+	return "err(" + strconv.Quote(r.Message) + ")"
+}
+func (r Result) Repr() string {
+	if r.Ok {
+		return "ok(" + Repr(r.Value) + ")"
+	}
+	return "err(" + strconv.Quote(r.Message) + ")"
 }
 
 // Repr renders o in a form that is close to its source literal.

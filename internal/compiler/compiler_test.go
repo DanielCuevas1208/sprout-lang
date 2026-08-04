@@ -43,6 +43,8 @@ func nextOffset(b []byte, ip int) int {
 	switch code.Opcode(b[ip]) {
 	case code.OpGetUp, code.OpSetUp:
 		return ip + 5
+	case code.OpTestResult:
+		return ip + 4
 	case code.OpCall:
 		return ip + 2
 	case code.OpPushConst, code.OpNewEnv, code.OpGetLocal, code.OpSetLocal,
@@ -222,6 +224,73 @@ func TestCompileShortCircuit(t *testing.T) {
 	main := p.Main
 	if got := opCount(t, main, code.OpDup); got != 2 {
 		t.Errorf("dup count: %d", got)
+	}
+}
+
+func TestCompileMatch(t *testing.T) {
+	p, err := compileSrc(t, `
+let r = ok(1)
+print(match r {
+    ok(v) => { v },
+    err(e) => { 0 },
+    _ => { -1 },
+})
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	main := p.Main
+	// The ok and err arms each test a result variant; the wildcard tests
+	// nothing.
+	if got := opCount(t, main, code.OpTestResult); got != 2 {
+		t.Errorf("test result count: %d", got)
+	}
+	// One dup carries the subject into each arm.
+	if got := opCount(t, main, code.OpDup); got != 3 {
+		t.Errorf("dup count: %d", got)
+	}
+	// One arm scope plus the wildcard arm scope.
+	if got := opCount(t, main, code.OpNewEnv); got != 3 {
+		t.Errorf("new env count: %d", got)
+	}
+}
+
+func TestCompileMatchLiterals(t *testing.T) {
+	p, err := compileSrc(t, `
+print(match 3 {
+    1 => { "one" },
+    3 => { "three" },
+    _ => { "other" },
+})
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	main := p.Main
+	// Each literal arm compares with the subject once.
+	if got := opCount(t, main, code.OpEq); got != 2 {
+		t.Errorf("eq count: %d", got)
+	}
+	if got := opCount(t, main, code.OpJumpIfTrue); got != 2 {
+		t.Errorf("jump if true count: %d", got)
+	}
+}
+
+func TestCompileMatchNested(t *testing.T) {
+	p, err := compileSrc(t, `
+let r = ok(err("x"))
+print(match r {
+    ok(err(m)) => { m },
+    _ => { "?" },
+})
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The ok(err(m)) arm needs two result tests, one per level.
+	main := p.Main
+	if got := opCount(t, main, code.OpTestResult); got != 2 {
+		t.Errorf("test result count: %d", got)
 	}
 }
 

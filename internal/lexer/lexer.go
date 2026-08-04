@@ -79,12 +79,10 @@ func (l *Lexer) lexToken() token.Token {
 		return l.lexString(pos, ch)
 	}
 
-	if op, ok := twoCharOps[ch]; ok {
-		if l.peekAt(1) == op.next {
-			l.advance()
-			l.advance()
-			return token.Token{Kind: op.kind, Lexeme: string(ch) + string(op.next), Pos: pos}
-		}
+	if kind, ok := twoCharOps[twoChar(l.file, l.pos)]; ok {
+		l.advance()
+		l.advance()
+		return token.Token{Kind: kind, Lexeme: string(l.file.Text[l.pos-2 : l.pos]), Pos: pos}
 	}
 
 	if kind, ok := singleCharOps[ch]; ok {
@@ -98,14 +96,22 @@ func (l *Lexer) lexToken() token.Token {
 	return token.Token{Kind: token.ILLEGAL, Lexeme: l.file.Text[l.pos-1 : l.pos], Pos: pos}
 }
 
-var twoCharOps = map[byte]struct {
-	next byte
-	kind token.Kind
-}{
-	'=': {next: '=', kind: token.EQ},
-	'!': {next: '=', kind: token.NEQ},
-	'<': {next: '=', kind: token.LE},
-	'>': {next: '=', kind: token.GE},
+// twoCharOps maps a two-character operator to its token kind.
+var twoCharOps = map[string]token.Kind{
+	"==": token.EQ,
+	"!=": token.NEQ,
+	"<=": token.LE,
+	">=": token.GE,
+	"=>": token.ARROW,
+}
+
+// twoChar returns the two bytes at pos, or a sentinel that matches no
+// operator when the source is too short.
+func twoChar(f *source.File, pos int) string {
+	if pos+2 <= len(f.Text) {
+		return f.Text[pos : pos+2]
+	}
+	return "\x00\x00"
 }
 
 var singleCharOps = map[byte]token.Kind{

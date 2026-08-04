@@ -1,6 +1,6 @@
 # Sprout Grammar
 
-This document is the formal grammar of Sprout version 0.4.
+This document is the formal grammar of Sprout version 0.5.
 
 ## Notation
 
@@ -127,8 +127,12 @@ Operators bind from loosest to tightest. Assignment and power are
 right-associative. All other binary operators are left-associative.
 
 ```
-expr          := assign
+expr          := assign | match_expr
 assign        := or_expr ["=" assign]
+match_expr    := "match" expr "{" match_arm {"," match_arm} [","] "}"
+match_arm     := pattern "=>" block
+pattern       := "_" | identifier | literal
+               | "ok" "(" pattern ")" | "err" "(" pattern ")"
 or_expr       := and_expr {"or" and_expr}
 and_expr      := equality {"and" equality}
 equality      := comparison {("==" | "!=") comparison}
@@ -157,6 +161,12 @@ member        := primary "." identifier
 ```
 
 A member access reads a field, a method, or an exported module name.
+
+A match evaluates its subject once.
+Arms run in order; the first match wins.
+A pattern binds at most one name.
+The last arm must be a catch-all, written `_` or a plain name.
+See `docs/results.md` for the full reference.
 
 ## Precedence table
 

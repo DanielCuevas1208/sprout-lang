@@ -209,6 +209,59 @@ func TestStatements(t *testing.T) {
 	}
 }
 
+func TestMatch(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{
+			"match r { ok(v) => { v } }",
+			"(program (match subject r (arm (ok v) (block v)) ))",
+		},
+		{
+			"match r { err(e) => { e }, _ => { nil } }",
+			"(program (match subject r (arm (err e) (block e)) (arm _ (block nil))))",
+		},
+		{
+			"match r { ok(ok(x)) => { x }, _ => { 0 } }",
+			"(program (match subject r (arm (ok (ok x)) (block x)) (arm _ (block (int 0)))))",
+		},
+		{
+			"match n { 0 => { \"zero\" }, 1 => { \"one\" }, _ => { \"many\" } }",
+			"(program (match subject n (arm (int 0) (block (string \"zero\"))) (arm (int 1) (block (string \"one\"))) (arm _ (block (string \"many\")))))",
+		},
+		{
+			"match b { true => { 1 }, false => { 0 }, _ => { -1 } }",
+			"(program (match subject b (arm true (block (int 1))) (arm false (block (int 0))) (arm _ (block (unary - (int 1))))))",
+		},
+		{
+			"match s { \"a\" => { 1 }, v => { v } }",
+			"(program (match subject s (arm (string \"a\") (block (int 1))) (arm v (block v))))",
+		},
+		{
+			"let m = match ok(2) { ok(x) => { x }, _ => { 0 } }",
+			"(program (let m value (match subject (call ok (int 2)) (arm (ok x) (block x)) (arm _ (block (int 0))))))",
+		},
+	}
+	for _, c := range cases {
+		expectParse(t, c.src, c.want)
+	}
+}
+
+func TestMatchParseErrors(t *testing.T) {
+	cases := []struct {
+		src  string
+		want string
+	}{
+		{"match", "expected a value to match"},
+		{"match r", "expected '{'"},
+		{"match r { ok(v) v }", "expected '=>'"},
+		{"match r { ok(v) => { v }", "expected '}'"},
+		{"match r { (1) => { 1 } }", "expected a pattern"},
+		{"match r { ok( => { 1 }, _ => { 0 } }", "expected a pattern"},
+	}
+	for _, c := range cases {
+		expectErrors(t, c.src, c.want)
+	}
+}
+
 func TestParseMethodReceiver(t *testing.T) {
 	cases := []struct {
 		src  string

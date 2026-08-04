@@ -186,6 +186,62 @@ func TestSetIndex(t *testing.T) {
 	}
 }
 
+func TestResults(t *testing.T) {
+	okVal := object.Result{Ok: true, Value: intVal(42)}
+	errVal := object.Result{Ok: false, Message: "boom"}
+
+	if okVal.String() != "ok(42)" {
+		t.Errorf("ok string: %q", okVal.String())
+	}
+	if errVal.String() != `err("boom")` {
+		t.Errorf("err string: %q", errVal.String())
+	}
+	if okVal.Type() != object.TypeResult {
+		t.Errorf("result type: %q", okVal.Type())
+	}
+	if !IsOk(okVal) || IsOk(errVal) || IsOk(intVal(1)) {
+		t.Error("IsOk misreports a result")
+	}
+	if got := mustValue(t, func() (object.Object, error) { return Unwrap(okVal) }); got.String() != "42" {
+		t.Errorf("unwrap ok: got %s", got)
+	}
+	if err := mustErr(t, func() (object.Object, error) { return Unwrap(errVal) }); err.Error() != "boom" {
+		t.Errorf("unwrap err message: %v", err)
+	}
+	if err := mustErr(t, func() (object.Object, error) { return Unwrap(intVal(1)) }); !strings.Contains(err.Error(), "expects a result") {
+		t.Errorf("unwrap non-result: %v", err)
+	}
+	if got := mustValue(t, func() (object.Object, error) { return UnwrapOr(errVal, intVal(7)) }); got.String() != "7" {
+		t.Errorf("unwrap_or fallback: got %s", got)
+	}
+	if got := mustValue(t, func() (object.Object, error) { return UnwrapOr(okVal, intVal(7)) }); got.String() != "42" {
+		t.Errorf("unwrap_or ok: got %s", got)
+	}
+	if err := mustErr(t, func() (object.Object, error) { return UnwrapOr(intVal(1), intVal(7)) }); !strings.Contains(err.Error(), "expects a result") {
+		t.Errorf("unwrap_or non-result: %v", err)
+	}
+}
+
+func TestResultEquality(t *testing.T) {
+	cases := []struct {
+		name string
+		a, b object.Object
+		want bool
+	}{
+		{"ok equal", object.Result{Ok: true, Value: intVal(1)}, object.Result{Ok: true, Value: intVal(1)}, true},
+		{"ok different value", object.Result{Ok: true, Value: intVal(1)}, object.Result{Ok: true, Value: intVal(2)}, false},
+		{"ok and err", object.Result{Ok: true, Value: intVal(1)}, object.Result{Ok: false, Message: "x"}, false},
+		{"err equal", object.Result{Ok: false, Message: "x"}, object.Result{Ok: false, Message: "x"}, true},
+		{"err different message", object.Result{Ok: false, Message: "x"}, object.Result{Ok: false, Message: "y"}, false},
+		{"ok and plain value", object.Result{Ok: true, Value: intVal(1)}, intVal(1), false},
+	}
+	for _, c := range cases {
+		if got := Equal(c.a, c.b); got != c.want {
+			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
 func TestSequence(t *testing.T) {
 	list := &object.List{Elems: []object.Object{intVal(1), intVal(2)}}
 	seq, err := Sequence(list)

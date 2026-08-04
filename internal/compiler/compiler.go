@@ -636,6 +636,9 @@ func (c *Compiler) compileExpr(e ast.Expr) {
 		idx := c.enterFn("", n.Params, n.Body)
 		c.b().AddU16(code.OpClosure, idx, n.FnPos)
 
+	case *ast.MatchExpr:
+		c.compileMatch(n)
+
 	default:
 		c.failf(e.Pos(), "internal error: unsupported expression")
 	}
@@ -732,6 +735,134 @@ func (c *Compiler) compileStructLit(n *ast.CallExpr) {
 		c.compileExpr(na.Value)
 	}
 	c.b().AddU16(code.OpBuildStruct, uint16(len(n.Named)), n.Lparen)
+}
+
+// patternJump is a failure jump emitted while testing a pattern.
+type patternJump struct {
+	off int
+	// result is true when off starts a TEST_RESULT instruction, whose jump
+	// operand follows a flag byte.
+	result bool
+}
+
+// compileMatch emits a match expression.
+//
+// The subject is pushed once. Each arm duplicates it, tests its pattern, and
+// runs its body when the pattern matches. A failed test jumps to the next
+// arm. The value each arm leaves on the stack is the match value.
+func (c *Compiler) compileMatch(n *ast.MatchExpr) {
+	c.compileExpr(n.Subject)
+	var ends []int
+	var pendingFails []patternJump
+	for _, arm := range n.Arms {
+		c.patchPatternJumps(pendingFails, c.b().Len())
+		// The subject is duplicated so the next arm can test it again.
+		c.b().Add(code.OpDup, arm.Pattern.Pos())
+		pendingFails = c.compilePatternTest(arm.Pattern, arm.Pattern.Pos())
+
+		// The arm body runs in a fresh scope. The pattern binds its variable
+		// into that scope, or the tested value is discarded. The subject copy
+		// is discarded either way.
+		envOff := c.b().AddU16(code.OpNewEnv, 0, arm.Body.Pos())
+		sc := newScope(c.cur())
+		c.pushFn(c.b(), sc)
+		if name, ok := patternVarName(arm.Pattern); ok {
+			c.declare(name, false, arm.Pattern.Pos())
+			c.b().AddU16(code.OpSetLocal, uint16(c.cur().names[name].slot), arm.Pattern.Pos())
+		} else {
+			c.b().Add(code.OpPop, arm.Pattern.Pos())
+		}
+		c.b().Add(code.OpPop, arm.Pattern.Pos())
+		c.compileStmtsLeavingValue(arm.Body.Stmts)
+		c.popScope(envOff, arm.Body.Pos())
+		ends = append(ends, c.b().AddU16(code.OpJump, 0, arm.Body.Pos()))
+	}
+	c.patchPatternJumps(pendingFails, c.b().Len())
+	// No arm matched (the checker forbids this): drop the subject.
+	c.b().Add(code.OpPop, n.MatchPos)
+	c.b().Add(code.OpNil, n.MatchPos)
+	end := c.b().Len()
+	for _, off := range ends {
+		c.b().PatchU16(off, uint16(end))
+	}
+}
+
+// patchPatternJumps sends every failure jump to the same target.
+func (c *Compiler) patchPatternJumps(jumps []patternJump, target int) {
+	for _, j := range jumps {
+		if j.result {
+			c.b().PatchResult(j.off, uint16(target))
+		} else {
+			c.b().PatchU16(j.off, uint16(target))
+		}
+	}
+}
+
+// compilePatternTest emits the instructions that test the value on top of the
+// stack against p.
+//
+// A test restores the value on success and cleans it up on failure, so the
+// caller can bind it and the next arm starts from the original subject. Every
+// failure path returns a jump that the caller patches to the next arm.
+func (c *Compiler) compilePatternTest(p ast.Pattern, pos source.Pos) []patternJump {
+	switch v := p.(type) {
+	case *ast.WildcardPattern:
+		return nil
+	case *ast.VarPattern:
+		return nil
+	case *ast.LitPattern:
+		// Duplicate the value, compare it with the literal, and keep it only
+		// when it matches. The failure path drops the leftover and jumps.
+		c.b().Add(code.OpDup, pos)
+		c.compileExpr(v.Value)
+		c.b().Add(code.OpEq, pos)
+		matched := c.b().AddU16(code.OpJumpIfTrue, 0, pos)
+		c.b().Add(code.OpPop, pos)
+		fail := c.b().AddU16(code.OpJump, 0, pos)
+		c.b().PatchU16(matched, uint16(c.b().Len()))
+		return []patternJump{{off: fail}}
+	case *ast.ResultPattern:
+		flag := byte(1)
+		if !v.IsOk {
+			flag = 0
+		}
+		jumps := []patternJump{{off: c.b().AddU16Byte(code.OpTestResult, flag, 0, pos), result: true}}
+		return append(jumps, c.compilePatternTest(v.Inner, pos)...)
+	}
+	return nil
+}
+
+// patternVarName returns the name a pattern binds, or "" when it binds
+// nothing. A pattern chain binds at most one variable, its innermost leaf.
+func patternVarName(p ast.Pattern) (string, bool) {
+	switch v := p.(type) {
+	case *ast.VarPattern:
+		return v.Ident.Name, true
+	case *ast.ResultPattern:
+		return patternVarName(v.Inner)
+	}
+	return "", false
+}
+
+// compileStmtsLeavingValue compiles a statement list so the value of the last
+// expression statement stays on the stack.
+//
+// This is the value of a match arm body. A body that ends in any other
+// statement, or that is empty, leaves nil. The interpreter mirrors this rule.
+func (c *Compiler) compileStmtsLeavingValue(stmts []ast.Stmt) {
+	for i, s := range stmts {
+		if i == len(stmts)-1 {
+			if es, ok := s.(*ast.ExprStmt); ok {
+				c.compileExpr(es.X)
+				return
+			}
+			c.compileStmt(s)
+			c.b().Add(code.OpNil, s.Pos())
+			return
+		}
+		c.compileStmt(s)
+	}
+	c.b().Add(code.OpNil, endPos(stmts))
 }
 
 // emitGet loads a name onto the stack.

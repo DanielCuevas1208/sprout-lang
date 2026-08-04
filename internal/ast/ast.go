@@ -495,6 +495,85 @@ func (n *FnExpr) Pos() source.Pos { return n.FnPos }
 func (n *FnExpr) End() source.Pos { return n.Body.End() }
 func (*FnExpr) expr()             {}
 
+// MatchExpr is a pattern-matching expression.
+//
+// A match evaluates its subject once, then tries each arm in order. The
+// first arm whose pattern matches runs; its body value is the match value.
+// Pattern variables bind inside the arm's block scope.
+type MatchExpr struct {
+	MatchPos source.Pos
+	Subject  Expr
+	Arms     []*MatchArm
+}
+
+func (n *MatchExpr) Pos() source.Pos { return n.MatchPos }
+func (n *MatchExpr) End() source.Pos {
+	if len(n.Arms) > 0 {
+		return n.Arms[len(n.Arms)-1].End()
+	}
+	return n.MatchPos
+}
+func (*MatchExpr) expr() {}
+
+// MatchArm is one "pattern => block" clause of a match.
+type MatchArm struct {
+	Pattern Pattern
+	Body    *Block
+}
+
+func (a *MatchArm) Pos() source.Pos { return a.Pattern.Pos() }
+func (a *MatchArm) End() source.Pos { return a.Body.End() }
+
+// Pattern is one match pattern.
+type Pattern interface {
+	Node
+	pattern()
+}
+
+// WildcardPattern matches any value and binds nothing. It is the catch-all
+// pattern written as "_".
+type WildcardPattern struct {
+	Position source.Pos
+}
+
+func (p *WildcardPattern) Pos() source.Pos { return p.Position }
+func (p *WildcardPattern) End() source.Pos { return p.Position }
+func (*WildcardPattern) pattern()          {}
+
+// VarPattern binds a name to the matched value.
+type VarPattern struct {
+	Ident *Ident
+}
+
+func (p *VarPattern) Pos() source.Pos { return p.Ident.Position }
+func (p *VarPattern) End() source.Pos { return p.Ident.End() }
+func (*VarPattern) pattern()          {}
+
+// LitPattern matches a value equal to a literal.
+//
+// The value is one of IntLit, FloatLit, StrLit, BoolLit, or NilLit.
+type LitPattern struct {
+	Value Expr
+}
+
+func (p *LitPattern) Pos() source.Pos { return p.Value.Pos() }
+func (p *LitPattern) End() source.Pos { return p.Value.End() }
+func (*LitPattern) pattern()          {}
+
+// ResultPattern matches an ok or err result and destructures it.
+//
+// IsOk reports which variant the pattern matches. Inner is the pattern that
+// tests the carried value or message.
+type ResultPattern struct {
+	Position source.Pos
+	IsOk     bool
+	Inner    Pattern
+}
+
+func (p *ResultPattern) Pos() source.Pos { return p.Position }
+func (p *ResultPattern) End() source.Pos { return p.Inner.End() }
+func (*ResultPattern) pattern()          {}
+
 // Sexp renders a node as an S-expression.
 //
 // The format is used by the "sprout parse" command and by parser tests.
@@ -671,6 +750,28 @@ func (p *printer) node(n Node) {
 			p.params(v.Params)
 			p.block(v.Body)
 		})
+	case *MatchExpr:
+		p.group("match", func() {
+			p.exprField("subject", v.Subject)
+			for _, arm := range v.Arms {
+				p.group("arm", func() {
+					p.pattern(arm.Pattern)
+					p.block(arm.Body)
+				})
+			}
+		})
+	case *WildcardPattern:
+		p.atom("_")
+	case *VarPattern:
+		p.atom(v.Ident.Name)
+	case *LitPattern:
+		p.node(v.Value)
+	case *ResultPattern:
+		if v.IsOk {
+			p.group("ok", func() { p.pattern(v.Inner) })
+		} else {
+			p.group("err", func() { p.pattern(v.Inner) })
+		}
 	default:
 		p.atom("?")
 	}
@@ -758,6 +859,15 @@ func (p *printer) block(b *Block) {
 	p.open("block")
 	p.stmts(b.Stmts)
 	p.close()
+}
+
+// pattern renders one match pattern node.
+func (p *printer) pattern(pat Pattern) {
+	if pat == nil {
+		p.atom("(nothing)")
+		return
+	}
+	p.node(pat)
 }
 
 func spaces(n int) []byte {

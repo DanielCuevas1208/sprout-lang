@@ -359,8 +359,50 @@ func (p *sourcePrinter) expr(e Expr, minPrec int) {
 		p.params(v.Params)
 		p.space()
 		p.block(v.Body)
+	case *MatchExpr:
+		p.b.WriteString("match ")
+		p.expr(v.Subject, 0)
+		p.b.WriteString(" {")
+		p.indent++
+		for i, arm := range v.Arms {
+			p.nl()
+			p.writeIndent()
+			p.pattern(arm.Pattern)
+			p.b.WriteString(" =>")
+			p.space()
+			p.block(arm.Body)
+			if i < len(v.Arms)-1 {
+				p.b.WriteString(",")
+			}
+		}
+		p.indent--
+		if len(v.Arms) > 0 {
+			p.nl()
+			p.writeIndent()
+		}
+		p.b.WriteString("}")
 	default:
 		p.b.WriteString("nil")
+	}
+}
+
+// pattern renders one match pattern.
+func (p *sourcePrinter) pattern(pat Pattern) {
+	switch v := pat.(type) {
+	case *WildcardPattern:
+		p.b.WriteString("_")
+	case *VarPattern:
+		p.name(v.Ident)
+	case *LitPattern:
+		p.expr(v.Value, 0)
+	case *ResultPattern:
+		if v.IsOk {
+			p.b.WriteString("ok(")
+		} else {
+			p.b.WriteString("err(")
+		}
+		p.pattern(v.Inner)
+		p.b.WriteString(")")
 	}
 }
 

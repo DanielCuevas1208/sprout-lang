@@ -137,9 +137,48 @@ func TestStructOpcodeNames(t *testing.T) {
 		{OpGetMember, "GET_MEMBER"},
 		{OpSetMember, "SET_MEMBER"},
 		{OpBuildStruct, "BUILD_STRUCT"},
+		{OpTestResult, "TEST_RESULT"},
 	} {
 		if got := c.op.String(); got != c.want {
 			t.Errorf("opcode: got %q, want %q", got, c.want)
+		}
+	}
+}
+
+func TestBuilderAddU16ByteAndPatchResult(t *testing.T) {
+	b := NewBuilder("main", "test.spr", nil)
+	off := b.AddU16Byte(OpTestResult, 1, 0, pos())
+	b.Add(OpNil, pos())
+	b.PatchResult(off, 0x1234)
+	got := b.Finish().Code
+	want := []byte{
+		byte(OpTestResult), 1, 0x12, 0x34,
+		byte(OpNil),
+	}
+	if len(got) != len(want) {
+		t.Fatalf("code length: got %d, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("byte %d: got %#x, want %#x", i, got[i], want[i])
+		}
+	}
+}
+
+func TestDisassembleTestResult(t *testing.T) {
+	b := NewBuilder("main", "test.spr", nil)
+	b.AddU16Byte(OpTestResult, 1, 0x0020, pos())
+	b.AddU16Byte(OpTestResult, 0, 0x0030, pos())
+	out := Disassemble(b.Finish())
+	for _, want := range []string{
+		"TEST_RESULT",
+		"ok",
+		"err",
+		"-> 0032",
+		"-> 0048",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("disassembly missing %q:\n%s", want, out)
 		}
 	}
 }

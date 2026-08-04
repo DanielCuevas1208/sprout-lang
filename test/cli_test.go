@@ -78,7 +78,7 @@ func TestVersion(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("version exit code %d", code)
 	}
-	if !strings.Contains(out, "0.4.0") {
+	if !strings.Contains(out, "0.5.0") {
 		t.Errorf("version output: %q", out)
 	}
 }
@@ -128,6 +128,60 @@ func TestRunStructProgramOnBothEngines(t *testing.T) {
 	}
 	if !strings.Contains(runOut, "7") || !strings.Contains(runOut, "Point{x: 9, y: 4}") {
 		t.Errorf("output: %q", runOut)
+	}
+}
+
+func TestRunMatchProgramOnBothEngines(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "match.spr")
+	src := "fn safe_div(a, b) {\n" +
+		"    if b == 0 {\n" +
+		"        return err(\"zero\")\n" +
+		"    }\n" +
+		"    return ok(a / b)\n" +
+		"}\n" +
+		"print(match safe_div(6, 3) {\n" +
+		"    ok(v) => { v },\n" +
+		"    err(m) => { 0 },\n" +
+		"    _ => { -1 },\n" +
+		"})\n" +
+		"print(match safe_div(1, 0) {\n" +
+		"    ok(v) => { v },\n" +
+		"    err(m) => { \"failed: \" + m },\n" +
+		"    _ => { \"?\" },\n" +
+		"})\n"
+	if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runOut, _, runCode := runCLI(t, "", "run", path)
+	if runCode != 0 {
+		t.Fatalf("run exit code %d", runCode)
+	}
+	vmOut, _, vmCode := runCLI(t, "", "vm", path)
+	if vmCode != 0 {
+		t.Fatalf("vm exit code %d", vmCode)
+	}
+	if runOut != vmOut {
+		t.Errorf("engines differ:\nrun: %q\n vm: %q", runOut, vmOut)
+	}
+	if !strings.Contains(runOut, "2") || !strings.Contains(runOut, "failed: zero") {
+		t.Errorf("output: %q", runOut)
+	}
+}
+
+func TestCheckMatchNeedsCatchAll(t *testing.T) {
+	src := "let r = ok(1)\nmatch r {\n    ok(v) => { print(v) },\n    err(e) => { print(e) },\n}\n"
+	dir := t.TempDir()
+	path := filepath.Join(dir, "nomatch.spr")
+	if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, errOut, code := runCLI(t, "", "check", path)
+	if code == 0 {
+		t.Fatalf("check should fail, exit code 0")
+	}
+	if !strings.Contains(errOut, "catch-all") {
+		t.Errorf("stderr: %q", errOut)
 	}
 }
 

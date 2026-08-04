@@ -69,6 +69,7 @@ const (
 	OpGetMember   // uint16 member-name constant
 	OpSetMember   // uint16 member-name constant
 	OpBuildStruct // uint16 count of named field/value pairs
+	OpTestResult  // byte ok-flag, uint16 target
 )
 
 // opNames maps an opcode to its disassembly name.
@@ -120,6 +121,7 @@ var opNames = map[Opcode]string{
 	OpGetMember:   "GET_MEMBER",
 	OpSetMember:   "SET_MEMBER",
 	OpBuildStruct: "BUILD_STRUCT",
+	OpTestResult:  "TEST_RESULT",
 }
 
 // String returns the disassembly name of an opcode.
@@ -217,10 +219,26 @@ func (b *Builder) AddU16Pair(op Opcode, a, b16 uint16, pos source.Pos) int {
 	return off
 }
 
+// AddU16Byte emits an opcode followed by a one-byte and a two-byte operand.
+func (b *Builder) AddU16Byte(op Opcode, v byte, u uint16, pos source.Pos) int {
+	off := len(b.fn.Code)
+	b.fn.Code = append(b.fn.Code, byte(op), v, byte(u>>8), byte(u))
+	b.track(off, pos)
+	return off
+}
+
 // PatchU16 overwrites the two-byte operand that starts at off.
 func (b *Builder) PatchU16(off int, v uint16) {
 	b.fn.Code[off+1] = byte(v >> 8)
 	b.fn.Code[off+2] = byte(v)
+}
+
+// PatchResult overwrites the two-byte operand of a TEST_RESULT instruction
+// that starts at off. TEST_RESULT is "opcode, flag byte, uint16 target", so
+// its operand begins two bytes in.
+func (b *Builder) PatchResult(off int, v uint16) {
+	b.fn.Code[off+2] = byte(v >> 8)
+	b.fn.Code[off+3] = byte(v)
 }
 
 // Len returns the length of the instruction stream so far.
@@ -346,6 +364,13 @@ func (d *disassembler) instruction(ip int) (int, bool) {
 	case OpJump, OpJumpIfFalse, OpJumpIfTrue, OpIterNext:
 		fmt.Fprintf(&d.b, "  -> %04d", U16(d.fn.Code, ip+1))
 		return ip + 3, true
+	case OpTestResult:
+		flag := "ok"
+		if d.fn.Code[ip+1] == 0 {
+			flag = "err"
+		}
+		fmt.Fprintf(&d.b, "  %s -> %04d", flag, U16(d.fn.Code, ip+2))
+		return ip + 4, true
 	case OpImport:
 		idx := U16(d.fn.Code, ip+1)
 		name := "<unknown>"

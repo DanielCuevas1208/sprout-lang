@@ -40,12 +40,12 @@ func TestBasicTokens(t *testing.T) {
 }
 
 func TestAllOperators(t *testing.T) {
-	toks := lex("== != < <= > >= = + - * / % ^ ( ) [ ] { } , : .\n")
+	toks := lex("== != < <= > >= = => + - * / % ^ ( ) [ ] { } , : .\n")
 	got := kinds(toks)
 	want := []token.Kind{
 		token.EQ, token.NEQ, token.LT, token.LE, token.GT, token.GE,
-		token.ASSIGN, token.PLUS, token.MINUS, token.STAR, token.SLASH,
-		token.PERCENT, token.CARET, token.LPAREN, token.RPAREN,
+		token.ASSIGN, token.ARROW, token.PLUS, token.MINUS, token.STAR,
+		token.SLASH, token.PERCENT, token.CARET, token.LPAREN, token.RPAREN,
 		token.LBRACKET, token.RBRACKET, token.LBRACE, token.RBRACE,
 		token.COMMA, token.COLON, token.DOT, token.NEWLINE, token.EOF,
 	}
@@ -60,7 +60,7 @@ func TestAllOperators(t *testing.T) {
 }
 
 func TestKeywords(t *testing.T) {
-	src := "let const fn if elif else for in while return break continue true false nil and or not import export as\n"
+	src := "let const fn if elif else for in while return break continue true false nil and or not import export as struct interface match\n"
 	toks := lex(src)
 	got := kinds(toks)
 	want := []token.Kind{
@@ -68,6 +68,7 @@ func TestKeywords(t *testing.T) {
 		token.FOR, token.IN, token.WHILE, token.RETURN, token.BREAK,
 		token.CONTINUE, token.TRUE, token.FALSE, token.NIL, token.AND,
 		token.OR, token.NOT, token.IMPORT, token.EXPORT, token.AS,
+		token.STRUCT, token.INTERFACE, token.MATCH,
 		token.NEWLINE, token.EOF,
 	}
 	if len(got) != len(want) {

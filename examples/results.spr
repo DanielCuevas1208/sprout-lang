@@ -1,0 +1,57 @@
+// results.spr - result types and pattern matching in action.
+
+fn safe_div(a, b) {
+    if b == 0 {
+        return err("division by zero")
+    }
+    return ok(a / b)
+}
+
+fn describe(n) {
+    return match n {
+        0 => { "zero" },
+        1 => { "one" },
+        v => { "the number " + str(v) },
+    }
+}
+
+fn report(r) {
+    return match r {
+        ok(v) => { "result: " + str(v) },
+        err(m) => { "failed: " + m },
+        _ => { "unknown" },
+    }
+}
+
+let good = safe_div(21, 3)
+let bad = safe_div(1, 0)
+
+print(report(good))
+print(report(bad))
+
+print("is_ok:", is_ok(good), "is_err:", is_err(good))
+print("unwrap:", unwrap(good))
+print("unwrap_or:", unwrap_or(bad, -1))
+
+print(describe(0))
+print(describe(1))
+print(describe(42))
+
+let steps = [safe_div(10, 2), safe_div(10, 0), safe_div(9, 3)]
+let total = 0
+for s in steps {
+    total = total + match s {
+        ok(v) => { v },
+        err(m) => { 0 },
+        _ => { 0 },
+    }
+}
+print("sum of steps:", total)
+
+let nested = ok(err("deep"))
+print(match nested {
+    ok(err(m)) => { "nested error: " + m },
+    ok(v) => { "nested ok" },
+    err(m) => { "error: " + m },
+    _ => { "?" },
+})

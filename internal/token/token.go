@@ -44,8 +44,10 @@ const (
 	AS
 	STRUCT
 	INTERFACE
+	MATCH
 
 	// Operators and punctuation.
+	ARROW    // =>
 	ASSIGN   // =
 	EQ       // ==
 	NEQ      // !=
@@ -94,6 +96,7 @@ var keywords = map[string]Kind{
 	"as":        AS,
 	"struct":    STRUCT,
 	"interface": INTERFACE,
+	"match":     MATCH,
 }
 
 // Lookup returns the keyword kind for name, or IDENT.
@@ -175,6 +178,10 @@ func (k Kind) String() string {
 		return "struct"
 	case INTERFACE:
 		return "interface"
+	case MATCH:
+		return "match"
+	case ARROW:
+		return "=>"
 	case ASSIGN:
 		return "="
 	case EQ:

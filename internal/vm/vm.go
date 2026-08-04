@@ -541,6 +541,20 @@ func (vm *VM) runFrames(until int) object.Object {
 				iter.index++
 				fr.ip += 3
 			}
+		case code.OpTestResult:
+			wantOk := fn.Code[fr.ip+1] == 1
+			target := int(code.U16(fn.Code, fr.ip+2))
+			value := vm.pop()
+			if r, ok := value.(object.Result); ok && r.Ok == wantOk {
+				if r.Ok {
+					vm.push(r.Value)
+				} else {
+					vm.push(object.Str{Value: r.Message})
+				}
+				fr.ip += 4
+			} else {
+				fr.ip = target
+			}
 		case code.OpNeg:
 			pos := fr.pos()
 			fr.ip++

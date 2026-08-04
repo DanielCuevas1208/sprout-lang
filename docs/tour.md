@@ -14,7 +14,7 @@ Save the code as `hello.spr`. Run it with `sprout run hello.spr`.
 
 ## Values and types
 
-Sprout has nine value types.
+Sprout has thirteen value types.
 
 - `int` holds a 64-bit integer.
 - `float` holds a 64-bit number.
@@ -28,6 +28,7 @@ Sprout has nine value types.
 - `struct` is an instance of a struct type.
 - `struct type` is a struct declaration.
 - `method` is a method with a bound receiver.
+- `result` holds a value or an error message.
 
 Use the `type` function to ask for the type of a value.
 
@@ -260,6 +261,55 @@ print(report(Square(side: 3)))   // area 9
 
 Read `docs/structs.md` for the full reference.
 
+## Results and pattern matching
+
+A result carries a value or an error message.
+Use `ok` to mark success. Use `err` to mark failure.
+
+```sprout
+fn safe_div(a, b) {
+    if b == 0 {
+        return err("division by zero")
+    }
+    return ok(a / b)
+}
+
+print(safe_div(10, 2))   // ok(5)
+print(safe_div(1, 0))    // err("division by zero")
+```
+
+Use `match` to take a result apart.
+
+```sprout
+let r = safe_div(10, 2)
+
+print(match r {
+    ok(v) => { "result: " + str(v) },
+    err(m) => { "failed: " + m },
+    _ => { "unknown" },
+})
+```
+
+The `_` pattern matches any value.
+It is the catch-all arm that a match must end with.
+
+Match any value, not just results.
+
+```sprout
+fn describe(n) {
+    return match n {
+        0 => { "zero" },
+        1 => { "one" },
+        x => { "the number " + str(x) },
+    }
+}
+
+print(describe(1))       // one
+print(describe(42))      // the number 42
+```
+
+Read `docs/results.md` for the full reference.
+
 ## Assertions
 
 The `assert` function checks a condition. It stops the program when the
@@ -322,6 +372,7 @@ sprout> :quit
 Sprout 0.2 added a stack-based bytecode virtual machine.
 Sprout 0.3 runs modules on both engines.
 Sprout 0.4 runs structs and methods on both engines.
+Sprout 0.5 runs results and match on both engines.
 It shares the parser, the checker, and the standard library with the
 interpreter. The two engines produce the same results.
 
@@ -343,6 +394,7 @@ Read `docs/bytecode.md` for the full VM reference.
 
 Read the standard library reference in `docs/stdlib.md`.
 Read the structs and interfaces reference in `docs/structs.md`.
+Read the results and pattern matching reference in `docs/results.md`.
 Read the formal grammar in `docs/grammar.md`.
 Read the bytecode virtual machine in `docs/bytecode.md`.
 Read the module system in `docs/modules.md`.

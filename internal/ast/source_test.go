@@ -81,6 +81,18 @@ func TestSourceRoundTripStructs(t *testing.T) {
 	}
 }
 
+func TestSourceRoundTripMatch(t *testing.T) {
+	cases := []string{
+		"let r = ok(1)\nprint(match r {\n    ok(v) => {\n        v\n    },\n    err(e) => {\n        0\n    },\n    _ => {\n        -1\n    }\n})",
+		"print(match n {\n    1 => {\n        \"one\"\n    },\n    _ => {\n        \"many\"\n    }\n})",
+		"let inner = ok(err(\"deep\"))\nprint(match inner {\n    ok(err(m)) => {\n        m\n    },\n    _ => {\n        \"?\"\n    }\n})",
+		"fn classify(n) {\n    return match n {\n        0 => {\n            \"zero\"\n        },\n        v => {\n            \"value\"\n        }\n    }\n}\nprint(classify(5))",
+	}
+	for _, src := range cases {
+		roundTrip(t, src)
+	}
+}
+
 func TestSourceBodyDropsImportsAndExports(t *testing.T) {
 	src := `import "util"
 export let x = 1

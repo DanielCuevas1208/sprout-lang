@@ -603,11 +603,131 @@ func (p *Parser) parsePrefix(t token.Token) ast.Expr {
 		return p.parseMap()
 	case token.FN:
 		return p.parseFnExpr()
+	case token.MATCH:
+		return p.parseMatch()
 	default:
 		p.errorf(t.Pos, "expected an expression, found %s", tokenString(t))
 		p.next()
 		return nil
 	}
+}
+
+// parseMatch parses "match" expr "{" pattern "=>" block {"," ...} "}".
+//
+// Arms are tried in order. The checker requires the last arm to be a
+// catch-all, so every subject is covered. A trailing comma is allowed.
+func (p *Parser) parseMatch() ast.Expr {
+	matchTok := p.next() // match
+	p.skipNewlines()
+
+	subject := p.parseExpression(precLowest)
+	if subject == nil {
+		p.errorf(p.cur().Pos, "expected a value to match after 'match', found %s", tokenString(p.cur()))
+		p.recoverStatement()
+		return nil
+	}
+	if !p.at(token.LBRACE) {
+		p.errorf(p.cur().Pos, "expected '{' to begin the match body, found %s", tokenString(p.cur()))
+		p.recoverStatement()
+		return nil
+	}
+	p.open()
+	p.next() // {
+	p.skipNewlines()
+
+	var arms []*ast.MatchArm
+	for !p.at(token.RBRACE) {
+		if p.at(token.EOF) {
+			p.errorf(p.cur().Pos, "unexpected end of file in match body")
+			break
+		}
+		pat := p.parsePattern()
+		if pat == nil {
+			break
+		}
+		if !p.at(token.ARROW) {
+			p.errorf(p.cur().Pos, "expected '=>' after the pattern, found %s", tokenString(p.cur()))
+			p.recoverStatement()
+			break
+		}
+		p.next() // =>
+		p.skipNewlines()
+		body := p.parseBlock()
+		if body == nil {
+			break
+		}
+		arms = append(arms, &ast.MatchArm{Pattern: pat, Body: body})
+		p.skipNewlines()
+		if p.at(token.COMMA) {
+			p.next()
+			p.skipNewlines()
+			if p.at(token.RBRACE) {
+				break // trailing comma
+			}
+			continue
+		}
+		break
+	}
+	p.close()
+
+	if !p.at(token.RBRACE) {
+		p.errorf(p.cur().Pos, "expected '}' to close the match body, found %s", tokenString(p.cur()))
+		p.recoverStatement()
+		return nil
+	}
+	p.next()
+	return &ast.MatchExpr{MatchPos: matchTok.Pos, Subject: subject, Arms: arms}
+}
+
+// parsePattern parses one match pattern.
+//
+// A pattern is a literal, a wildcard "_", a name that binds a value, or a
+// result pattern "ok(...)" or "err(...)". Inside a result pattern any other
+// pattern may nest, so a chain like "ok(err(x))" is valid.
+func (p *Parser) parsePattern() ast.Pattern {
+	t := p.cur()
+	switch t.Kind {
+	case token.IDENT:
+		if t.Lexeme == "_" {
+			p.next()
+			return &ast.WildcardPattern{Position: t.Pos}
+		}
+		if (t.Lexeme == "ok" || t.Lexeme == "err") && p.peek(1).Kind == token.LPAREN {
+			return p.parseResultPattern(t)
+		}
+		p.next()
+		return &ast.VarPattern{Ident: &ast.Ident{Name: t.Lexeme, Position: t.Pos}}
+	case token.INT, token.FLOAT, token.STRING, token.TRUE, token.FALSE, token.NIL:
+		value := p.parsePrefix(t)
+		if value == nil {
+			return nil
+		}
+		return &ast.LitPattern{Value: value}
+	}
+	p.errorf(t.Pos, "expected a pattern, found %s", tokenString(t))
+	p.next()
+	return nil
+}
+
+// parseResultPattern parses "ok(" pattern ")" or "err(" pattern ")".
+func (p *Parser) parseResultPattern(t token.Token) ast.Pattern {
+	isOk := t.Lexeme == "ok"
+	p.next() // ok or err
+	p.next() // (
+	p.skipNewlines()
+
+	inner := p.parsePattern()
+	if inner == nil {
+		return nil
+	}
+	p.skipNewlines()
+	if !p.at(token.RPAREN) {
+		p.errorf(p.cur().Pos, "expected ')' to close the result pattern, found %s", tokenString(p.cur()))
+		p.recoverStatement()
+		return nil
+	}
+	p.next()
+	return &ast.ResultPattern{Position: t.Pos, IsOk: isOk, Inner: inner}
 }
 
 func (p *Parser) parseGroup() ast.Expr {

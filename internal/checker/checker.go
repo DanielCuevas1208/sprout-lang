@@ -384,6 +384,9 @@ func (c *checker) staticType(sc *scope, e ast.Expr) string {
 			if info, isStruct := c.types[id.Name]; isStruct {
 				return info.name
 			}
+			if id.Name == "ok" || id.Name == "err" {
+				return "result"
+			}
 		}
 	case *ast.IntLit:
 		return "int"
@@ -505,7 +508,7 @@ func (c *checker) checkMethod(n *ast.FnStmt, sc *scope) {
 var knownTypes = map[string]bool{
 	"int": true, "float": true, "string": true, "bool": true,
 	"nil": true, "list": true, "map": true, "function": true, "range": true,
-	"struct": true, "struct type": true, "method": true,
+	"struct": true, "struct type": true, "method": true, "result": true,
 }
 
 func (c *checker) checkTypeAnn(id *ast.Ident) {
@@ -562,7 +565,71 @@ func (c *checker) checkExpr(e ast.Expr, sc *scope) {
 		c.funcDepth++
 		c.checkStmts(n.Body.Stmts, fnScope)
 		c.funcDepth--
+	case *ast.MatchExpr:
+		c.checkMatch(n, sc)
 	}
+}
+
+// checkMatch validates a match expression and its arms.
+//
+// The subject is checked once. Each pattern is validated, and its variable
+// bindings are declared in a fresh scope for the arm body. The last arm must
+// be a catch-all so the match always covers its subject.
+func (c *checker) checkMatch(n *ast.MatchExpr, sc *scope) {
+	c.checkExpr(n.Subject, sc)
+	if len(n.Arms) == 0 {
+		c.errorf(n.MatchPos, "match must have at least one arm")
+		return
+	}
+	last := n.Arms[len(n.Arms)-1]
+	if !isCatchAll(last.Pattern) {
+		c.errorf(last.Pattern.Pos(), "match must end with a catch-all arm that uses '_' or a variable name")
+	}
+	for _, arm := range n.Arms {
+		c.checkPattern(arm.Pattern, sc)
+		armScope := newScope(sc)
+		bindPattern(arm.Pattern, armScope, c)
+		c.checkStmts(arm.Body.Stmts, armScope)
+	}
+}
+
+// checkPattern validates one pattern. Literals and result patterns are
+// checked structurally; a variable name has nothing to validate.
+func (c *checker) checkPattern(p ast.Pattern, sc *scope) {
+	switch v := p.(type) {
+	case *ast.WildcardPattern:
+	case *ast.VarPattern:
+	case *ast.LitPattern:
+		c.checkExpr(v.Value, sc)
+	case *ast.ResultPattern:
+		c.checkPattern(v.Inner, sc)
+	}
+}
+
+// bindPattern declares the variables that a pattern binds in sc.
+//
+// A pattern binds at most one name, its innermost leaf. Duplicate bindings
+// are reported rather than silently shadowed.
+func bindPattern(p ast.Pattern, sc *scope, c *checker) {
+	switch v := p.(type) {
+	case *ast.VarPattern:
+		if _, dup := sc.names[v.Ident.Name]; dup {
+			c.errorf(v.Ident.Position, "duplicate binding '%s' in match pattern", v.Ident.Name)
+			return
+		}
+		sc.names[v.Ident.Name] = symbol{kind: symParam, pos: v.Ident.Position}
+	case *ast.ResultPattern:
+		bindPattern(v.Inner, sc, c)
+	}
+}
+
+// isCatchAll reports whether p always matches and binds nothing or a value.
+func isCatchAll(p ast.Pattern) bool {
+	switch p.(type) {
+	case *ast.WildcardPattern, *ast.VarPattern:
+		return true
+	}
+	return false
 }
 
 // checkAssign validates an assignment target and its value.

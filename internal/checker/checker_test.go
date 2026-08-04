@@ -99,3 +99,48 @@ func TestClosureCapture(t *testing.T) {
 	expectClean(t, "let count = 0\nfn bump() { count = count + 1 }\nbump()")
 	expectError(t, "fn outer() { fn inner() { return secret } }", "undefined name 'secret'")
 }
+
+func TestMatchChecking(t *testing.T) {
+	expectClean(t, `let r = ok(1)
+print(match r {
+    ok(v) => { v },
+    err(e) => { 0 },
+    _ => { -1 },
+})`)
+
+	expectClean(t, `let n = 3
+let x = match n {
+    1 => { "one" },
+    v => { "other" },
+}
+print(x)`)
+
+	// The last arm must be a catch-all so every subject is covered.
+	expectError(t, `let r = ok(1)
+match r {
+    ok(v) => { v },
+    err(e) => { 0 },
+}`, "catch-all")
+
+	expectError(t, `let n = 1
+match n {
+    1 => { "one" },
+    _ => { "other" },
+    2 => { "two" },
+}`, "catch-all")
+
+	// Pattern variables bind in the arm body only.
+	expectClean(t, `let r = ok(5)
+print(match r {
+    ok(v) => { v + 1 },
+    _ => { 0 },
+})`)
+	expectError(t, `let r = ok(5)
+match r {
+    ok(v) => { v },
+    _ => { v },
+}`, "undefined name 'v'")
+
+	// A result type annotation accepts ok() and err() values.
+	expectClean(t, "let r: result = ok(1)\nlet e: result = err(\"no\")\nprint(r, e)")
+}

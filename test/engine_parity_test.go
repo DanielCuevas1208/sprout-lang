@@ -186,6 +186,72 @@ print(n.greet("hello"))
 print(type(n))
 print(type(Node))
 print(type(n.greet))`,
+		`fn safe_div(a, b) {
+    if b == 0 {
+        return err("division by zero")
+    }
+    return ok(a / b)
+}
+print(match safe_div(10, 2) {
+    ok(v) => { v },
+    err(m) => { 0 },
+    _ => { -1 },
+})
+print(match safe_div(1, 0) {
+    ok(v) => { v },
+    err(m) => { "error: " + m },
+    _ => { "?" },
+})`,
+		`let total = 0
+for i in range(0, 5) {
+    total = total + match i {
+        0 => { 10 },
+        3 => { 30 },
+        _ => { i },
+    }
+}
+print(total)`,
+		`let nested = ok(err("deep"))
+print(match nested {
+    ok(err(m)) => { "nested: " + m },
+    ok(v) => { "shallow" },
+    err(m) => { m },
+    _ => { "?" },
+})
+print(match ok(ok(6)) {
+    ok(ok(x)) => { x },
+    _ => { 0 },
+})`,
+		`fn describe(n) {
+    return match n {
+        0 => { "zero" },
+        1 => { "one" },
+        v => { "other " + str(v) },
+    }
+}
+print(describe(0), describe(1), describe(7))`,
+		`let r = ok(ok("nested"))
+print(match r {
+    ok(ok(v)) => { v },
+    _ => { "?" },
+})
+print(unwrap(r))`,
+		`let score = 5
+let label = match score {
+    5 => { "five" },
+    _ => { "other" },
+}
+print(label)
+let r = err("nope")
+print(unwrap_or(r, "fallback"))`,
+		`let double = match ok(5) {
+    ok(v) => {
+        let get = fn() { return v }
+        get() * 2
+    },
+    _ => { 0 },
+}
+print(double)`,
 	}
 
 	for _, src := range cases {
@@ -221,6 +287,15 @@ print(p.missing)`,
 		`struct Point { x }
 let p = Point(1)
 p.missing = 2`,
+		"print(unwrap(err(\"boom\")))",
+		`fn fail() {
+    return err("kaboom")
+}
+print(match fail() {
+    ok(v) => { v },
+    err(m) => { 1 / 0 },
+    _ => { 0 },
+})`,
 	}
 	for _, src := range cases {
 		ivOut, ivErr := runInterpSrc(src)

@@ -103,6 +103,12 @@ var Builtins = []*Builtin{
 	{Name: "sqrt", MinArgs: 1, MaxArgs: 1, Fn: builtinSqrt},
 	{Name: "assert", MinArgs: 1, MaxArgs: 2, Fn: builtinAssert},
 	{Name: "module", MinArgs: 2, MaxArgs: 2, Fn: builtinModule},
+	{Name: "ok", MinArgs: 1, MaxArgs: 1, Fn: builtinOk},
+	{Name: "err", MinArgs: 1, MaxArgs: 1, Fn: builtinErr},
+	{Name: "is_ok", MinArgs: 1, MaxArgs: 1, Fn: builtinIsOk},
+	{Name: "is_err", MinArgs: 1, MaxArgs: 1, Fn: builtinIsErr},
+	{Name: "unwrap", MinArgs: 1, MaxArgs: 1, Fn: builtinUnwrap},
+	{Name: "unwrap_or", MinArgs: 2, MaxArgs: 2, Fn: builtinUnwrapOr},
 }
 
 // Names lists the standard library function names.
@@ -196,6 +202,15 @@ func Equal(a, b object.Object) bool {
 			}
 		}
 		return true
+	case object.Result:
+		y := b.(object.Result)
+		if x.Ok != y.Ok {
+			return false
+		}
+		if x.Ok {
+			return Equal(x.Value, y.Value)
+		}
+		return x.Message == y.Message
 	case object.Object:
 		return a == b
 	}
@@ -239,6 +254,53 @@ func AsIntIndex(o object.Object) (int64, bool) {
 		return v.Value, true
 	}
 	return 0, false
+}
+
+// IsOk reports whether o is an ok result.
+func IsOk(o object.Object) bool {
+	if r, ok := o.(object.Result); ok {
+		return r.Ok
+	}
+	return false
+}
+
+// ResultValue returns the value of an ok result, or the message of an error
+// result. It reports whether o is a result at all.
+func ResultValue(o object.Object) (object.Object, bool) {
+	if r, ok := o.(object.Result); ok {
+		if r.Ok {
+			return r.Value, true
+		}
+		return object.Str{Value: r.Message}, true
+	}
+	return nil, false
+}
+
+// Unwrap returns the value of an ok result, or an error for an error result.
+//
+// The error carries the result's message so a failed unwrap reads like a
+// runtime error in the source language.
+func Unwrap(o object.Object) (object.Object, error) {
+	r, ok := o.(object.Result)
+	if !ok {
+		return nil, FmtErr("unwrap() expects a result, got %s", o.Type())
+	}
+	if !r.Ok {
+		return nil, FmtErr("%s", r.Message)
+	}
+	return r.Value, nil
+}
+
+// UnwrapOr returns the value of an ok result, or def for an error result.
+func UnwrapOr(o object.Object, def object.Object) (object.Object, error) {
+	r, ok := o.(object.Result)
+	if !ok {
+		return nil, FmtErr("unwrap_or() expects a result, got %s", o.Type())
+	}
+	if !r.Ok {
+		return def, nil
+	}
+	return r.Value, nil
 }
 
 func isFloat(o object.Object) bool {

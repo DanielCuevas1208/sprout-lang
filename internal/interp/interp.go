@@ -422,8 +422,106 @@ func (iv *Interpreter) evalExpr(e ast.Expr, env *Env) object.Object {
 
 	case *ast.FnExpr:
 		return &Function{Params: n.Params, Body: n.Body, Env: env}
+
+	case *ast.MatchExpr:
+		return iv.evalMatch(n, env)
 	}
 	iv.raise("unsupported expression", e.Pos())
+	return nil
+}
+
+// evalMatch evaluates a match expression.
+//
+// The subject is evaluated once. Arms are tried in order; the first arm
+// whose pattern matches runs its body. Pattern variables bind in the arm's
+// block scope. The checker requires a catch-all arm, so this loop always
+// returns through an arm.
+func (iv *Interpreter) evalMatch(n *ast.MatchExpr, env *Env) object.Object {
+	subject := iv.evalExpr(n.Subject, env)
+	for _, arm := range n.Arms {
+		binding, matched := iv.matchPattern(arm.Pattern, subject)
+		if !matched {
+			continue
+		}
+		armEnv := NewEnv(env)
+		if binding.name != "" {
+			armEnv.Define(binding.name, binding.value, false)
+		}
+		return iv.evalMatchArm(arm.Body, armEnv)
+	}
+	iv.raise(fmt.Sprintf("no arm of the match matched a %s", subject.Type()), n.MatchPos)
+	return nil
+}
+
+// evalMatchArm runs an arm body and returns its value.
+//
+// The value is the last expression statement's value. A body that ends in
+// any other statement, or that is empty, is worth nil. This mirrors the
+// compiler, so both engines agree on the value of a match.
+func (iv *Interpreter) evalMatchArm(body *ast.Block, env *Env) object.Object {
+	n := len(body.Stmts)
+	for i := 0; i < n; i++ {
+		s := body.Stmts[i]
+		if i == n-1 {
+			if es, ok := s.(*ast.ExprStmt); ok {
+				return iv.evalExpr(es.X, env)
+			}
+			iv.evalStmt(s, env)
+			return object.NilValue
+		}
+		iv.evalStmt(s, env)
+	}
+	return object.NilValue
+}
+
+// patternBinding is the single variable a match pattern can bind.
+type patternBinding struct {
+	name  string
+	value object.Object
+}
+
+// matchPattern tests value against p. It reports whether the pattern
+// matched and, when the pattern binds a variable, the name and value.
+func (iv *Interpreter) matchPattern(p ast.Pattern, value object.Object) (patternBinding, bool) {
+	switch v := p.(type) {
+	case *ast.WildcardPattern:
+		return patternBinding{}, true
+	case *ast.VarPattern:
+		return patternBinding{name: v.Ident.Name, value: value}, true
+	case *ast.LitPattern:
+		lit := literalValue(v.Value)
+		if lit == nil || !runtime.Equal(lit, value) {
+			return patternBinding{}, false
+		}
+		return patternBinding{}, true
+	case *ast.ResultPattern:
+		r, ok := value.(object.Result)
+		if !ok || r.Ok != v.IsOk {
+			return patternBinding{}, false
+		}
+		if r.Ok {
+			return iv.matchPattern(v.Inner, r.Value)
+		}
+		return iv.matchPattern(v.Inner, object.Str{Value: r.Message})
+	}
+	return patternBinding{}, false
+}
+
+// literalValue returns the runtime value of a match literal, or nil when the
+// node is not a literal the parser is allowed to produce here.
+func literalValue(e ast.Expr) object.Object {
+	switch v := e.(type) {
+	case *ast.IntLit:
+		return object.Int{Value: v.Value}
+	case *ast.FloatLit:
+		return object.Float{Value: v.Value}
+	case *ast.StrLit:
+		return object.Str{Value: v.Value}
+	case *ast.BoolLit:
+		return object.Bool{Value: v.Value}
+	case *ast.NilLit:
+		return object.NilValue
+	}
 	return nil
 }
 

@@ -548,3 +548,38 @@ func writeString(w io.Writer, s string) {
 	}
 	_, _ = fmt.Fprint(w, s)
 }
+
+// builtinOk wraps a value in an ok result.
+func builtinOk(ctx *Context, args []object.Object, pos source.Pos) (object.Object, error) {
+	return object.Result{Ok: true, Value: args[0]}, nil
+}
+
+// builtinErr wraps a message in an error result.
+func builtinErr(ctx *Context, args []object.Object, pos source.Pos) (object.Object, error) {
+	msg, ok := args[0].(object.Str)
+	if !ok {
+		return nil, FmtErr("err() expects a string message, got %s", args[0].Type())
+	}
+	return object.Result{Ok: false, Message: msg.Value}, nil
+}
+
+// builtinIsOk reports whether a value is an ok result.
+func builtinIsOk(ctx *Context, args []object.Object, pos source.Pos) (object.Object, error) {
+	return object.Bool{Value: IsOk(args[0])}, nil
+}
+
+// builtinIsErr reports whether a value is an error result.
+func builtinIsErr(ctx *Context, args []object.Object, pos source.Pos) (object.Object, error) {
+	_, isResult := args[0].(object.Result)
+	return object.Bool{Value: isResult && !IsOk(args[0])}, nil
+}
+
+// builtinUnwrap returns the value of an ok result and fails on an error.
+func builtinUnwrap(ctx *Context, args []object.Object, pos source.Pos) (object.Object, error) {
+	return Unwrap(args[0])
+}
+
+// builtinUnwrapOr returns the value of an ok result, or a fallback value.
+func builtinUnwrapOr(ctx *Context, args []object.Object, pos source.Pos) (object.Object, error) {
+	return UnwrapOr(args[0], args[1])
+}

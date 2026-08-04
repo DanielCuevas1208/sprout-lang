@@ -108,6 +108,7 @@ This matches the interpreter, so closures see their own copy.
 | GET_MEMBER | name | Push a field, method, or module member. |
 | SET_MEMBER | name | Store a value in a struct field. |
 | BUILD_STRUCT | count | Build a struct from named values. |
+| TEST_RESULT | ok-flag, target | Unwrap a matching result, else jump. |
 | NEG | none | Negate the top. |
 | NOT | none | Invert the truthiness. |
 | ADD | none | Add the top two values. |
@@ -174,6 +175,40 @@ The right operand runs only when needed.
 print(0 and 1)   // prints 0
 print(1 or 2)    // prints 1
 ```
+
+## Pattern matching
+
+A match expression compiles into a subject push and an arm chain.
+Each arm starts by duplicating the subject.
+Its pattern test either unwraps the value or jumps to the next arm.
+
+A result pattern compiles to `TEST_RESULT`.
+The instruction reads the ok-flag and the failure target.
+A matching result is unwrapped and stays on the stack.
+Any other value jumps to the target.
+
+A literal pattern duplicates the value and compares it.
+The comparison is `==`; an integer matches an equal float.
+
+```text
+0000  GET_LOCAL  ; test.spr:2:13  0
+0003  DUP  ; test.spr:3:5
+0004  TEST_RESULT  ; test.spr:3:5  ok -> 0032
+0008  NEW_ENV  ; test.spr:3:14  1
+0011  SET_LOCAL  ; test.spr:3:5  0
+0014  POP  ; test.spr:3:5
+0015  GET_LOCAL  ; test.spr:3:16  0
+0018  PUSH_CONST  ; test.spr:3:20  1  (2)
+0021  MUL  ; test.spr:3:18
+0022  END_ENV  ; test.spr:3:14
+0023  JUMP  ; test.spr:3:14  -> 0068
+0026  DUP  ; test.spr:4:5
+0027  TEST_RESULT  ; test.spr:4:5  err -> 0046
+```
+
+Each arm body runs in its own environment.
+Pattern variables bind in that environment.
+The arm body leaves its value on the stack.
 
 ## Shared runtime
 
