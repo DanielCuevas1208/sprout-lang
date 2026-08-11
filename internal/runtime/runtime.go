@@ -35,9 +35,25 @@ type Context struct {
 	// The hook reports an error by panicking with the engine's signal.
 	Call func(fn object.Object, args []object.Object, pos source.Pos) object.Object
 
+	// Done closes when the current task receives a cancellation request.
+	Done <-chan struct{}
+
 	// Spawn starts fn in a separate execution context. The hook returns a task
 	// handle so the spawn builtin stays independent of either engine.
 	Spawn func(fn object.Object, args []object.Object, pos source.Pos) (*object.Task, error)
+}
+
+// Cancelled reports whether the current task received a cancellation request.
+func (c *Context) Cancelled() bool {
+	if c == nil || c.Done == nil {
+		return false
+	}
+	select {
+	case <-c.Done:
+		return true
+	default:
+		return false
+	}
 }
 
 // Builtin is one standard library function.
@@ -119,6 +135,8 @@ var Builtins = []*Builtin{
 	{Name: "close", MinArgs: 1, MaxArgs: 1, Fn: builtinClose},
 	{Name: "spawn", MinArgs: 1, MaxArgs: 1, Fn: builtinSpawn},
 	{Name: "await", MinArgs: 1, MaxArgs: 1, Fn: builtinAwait},
+	{Name: "cancel", MinArgs: 1, MaxArgs: 1, Fn: builtinCancel},
+	{Name: "is_cancelled", MinArgs: 0, MaxArgs: 0, Fn: builtinIsCancelled},
 }
 
 // Names lists the standard library function names.

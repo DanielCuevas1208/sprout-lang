@@ -1,6 +1,6 @@
 # Standard Library
 
-This page lists the built-in functions of Sprout 0.6.
+This page lists the built-in functions of Sprout 0.7.
 They are available in every program without an import.
 
 ## Output
@@ -120,10 +120,13 @@ Programs can use it to build module values dynamically.
 | `close(channel)` | Closes a channel. |
 | `spawn(fn)` | Starts a zero-argument function as a task. |
 | `await(task)` | Waits for a task and returns a result. |
+| `cancel(task)` | Requests cooperative cancellation. |
+| `is_cancelled()` | Reports current task cancellation. |
 
 `recv` returns `ok(value)` for a value.
 It returns `err("channel closed")` after close.
 `await` returns the worker value or an error result.
+`cancel` wakes blocked operations when cancellation reaches a task.
 See `docs/concurrency.md` for the full reference.
 
 ## Assertions

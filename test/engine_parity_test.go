@@ -263,6 +263,16 @@ let right = spawn(fn() {
 })
 print(unwrap(recv(jobs)) + unwrap(recv(jobs)))
 print(unwrap(await(left)), unwrap(await(right)))`,
+		`let gate = channel()
+let worker = spawn(fn() {
+    let signal = recv(gate)
+    if is_cancelled() {
+        return "stopped"
+    }
+    return signal
+})
+cancel(worker)
+print(unwrap_or(await(worker), "cancelled"))`,
 	}
 
 	for _, src := range cases {

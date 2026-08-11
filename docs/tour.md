@@ -375,6 +375,7 @@ Sprout 0.3 runs modules on both engines.
 Sprout 0.4 runs structs and methods on both engines.
 Sprout 0.5 runs results and match on both engines.
 Sprout 0.6 runs channels and tasks on both engines.
+Sprout 0.7 runs cooperative cancellation on both engines.
 It shares the parser, the checker, and the standard library with the
 interpreter. The two engines produce the same results.
 
@@ -400,4 +401,5 @@ Read the results and pattern matching reference in `docs/results.md`.
 Read the formal grammar in `docs/grammar.md`.
 Read the bytecode virtual machine in `docs/bytecode.md`.
 Read the module system in `docs/modules.md`.
+Read concurrency and cancellation in `docs/concurrency.md`.
 Run the example programs in the `examples` directory.

@@ -606,7 +606,7 @@ func builtinSend(ctx *Context, args []object.Object, pos source.Pos) (object.Obj
 	if !ok {
 		return nil, FmtErr("send() expects a channel, got %s", args[0].Type())
 	}
-	if err := ch.Send(args[1]); err != nil {
+	if err := ch.SendContext(ctx.Done, args[1]); err != nil {
 		return nil, err
 	}
 	return object.NilValue, nil
@@ -619,7 +619,10 @@ func builtinRecv(ctx *Context, args []object.Object, pos source.Pos) (object.Obj
 	if !ok {
 		return nil, FmtErr("recv() expects a channel, got %s", args[0].Type())
 	}
-	value, open := ch.Receive()
+	value, open, err := ch.ReceiveContext(ctx.Done)
+	if err != nil {
+		return object.Result{Ok: false, Message: err.Error()}, nil
+	}
 	if !open {
 		return object.Result{Ok: false, Message: "channel closed"}, nil
 	}
@@ -653,9 +656,24 @@ func builtinAwait(ctx *Context, args []object.Object, pos source.Pos) (object.Ob
 	if !ok {
 		return nil, FmtErr("await() expects a task, got %s", args[0].Type())
 	}
-	value, err := task.Await()
+	value, err := task.AwaitContext(ctx.Done)
 	if err != nil {
 		return object.Result{Ok: false, Message: err.Error()}, nil
 	}
 	return object.Result{Ok: true, Value: value}, nil
+}
+
+// builtinCancel requests cooperative cancellation for a task.
+func builtinCancel(ctx *Context, args []object.Object, pos source.Pos) (object.Object, error) {
+	task, ok := args[0].(*object.Task)
+	if !ok {
+		return nil, FmtErr("cancel() expects a task, got %s", args[0].Type())
+	}
+	task.Cancel()
+	return object.NilValue, nil
+}
+
+// builtinIsCancelled reports whether the current task received cancellation.
+func builtinIsCancelled(ctx *Context, args []object.Object, pos source.Pos) (object.Object, error) {
+	return object.Bool{Value: ctx.Cancelled()}, nil
 }

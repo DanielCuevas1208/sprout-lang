@@ -1,6 +1,6 @@
 # Sprout Grammar
 
-This document is the formal grammar of Sprout version 0.6.
+This document is the formal grammar of Sprout version 0.7.
 
 ## Notation
 

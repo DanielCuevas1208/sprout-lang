@@ -1,61 +1,72 @@
 # Concurrency
 
-Sprout 0.6 provides channels and tasks.
-A channel moves values between concurrent functions.
-A task represents one spawned function.
+Sprout 0.7 provides channels, tasks, and cooperative cancellation.
 
 ## Channels
 
 Create a channel with `channel()`.
-Pass a non-negative integer to set its buffer capacity.
-A zero-capacity channel waits for a sender and a receiver.
-A buffered channel accepts values until its capacity fills.
+Pass a non-negative integer for buffered capacity.
+A zero-capacity channel waits for a sender and receiver.
 
 Send one value with `send(channel, value)`.
 Receive one result with `recv(channel)`.
-The receive result is `ok(value)` while the channel remains open.
-The receive result is `err("channel closed")` after the channel closes.
 Close a channel with `close(channel)`.
+
+`recv` returns `ok(value)` while the channel remains open.
+It returns `err("channel closed")` after close.
 
 ## Tasks
 
 Start a zero-argument function with `spawn(fn() { ... })`.
-Wait for a task with `await(task)`.
-The await result is `ok(value)` after normal completion.
-The await result is `err(message)` after a task error.
+Wait for completion with `await(task)`.
+
+`await` returns `ok(value)` after normal completion.
+It returns `err(message)` after a task error.
+
+## Cancellation
+
+Request cancellation with `cancel(task)`.
+Check the current task with `is_cancelled()`.
+Cancellation is cooperative.
+It does not force arbitrary code to stop.
+
+Blocking `send`, `recv`, and `await` observe cancellation.
+A CPU-bound task must poll `is_cancelled()` inside its loop.
+A canceled task completes with `err("task cancelled")`.
 
 ```sprout
-let jobs = channel()
+let gate = channel()
 let worker = spawn(fn() {
-    send(jobs, 21)
-    return "worker finished"
+    let signal = recv(gate)
+    if is_cancelled() {
+        return "stopped"
+    }
+    return signal
 })
 
-print(unwrap(recv(jobs)))
-print(unwrap(await(worker)))
-close(jobs)
-print(is_err(recv(jobs)))
+cancel(worker)
+print(unwrap_or(await(worker), "cancelled"))
 ```
 
-The program prints the following lines.
+The program prints the following line.
 
 ```text
-21
-worker finished
-true
+cancelled
 ```
 
 ## Execution model
 
 Each task uses a child interpreter or VM context.
-A closure keeps its captured environment.
+Closures keep their captured environment.
 Channels and tasks remain safe to share between contexts.
-The parent and child contexts share the configured input and output streams.
+The parent and child contexts share configured input and output streams.
 
-Do not mutate captured lists, maps, or structs from multiple tasks.
 Use channels to coordinate shared work.
 Await every task that the program needs.
 
-Sprout does not cancel tasks.
-Sprout does not provide timeouts or channel selection.
-A task that does not finish can block `await` forever.
+## Limitations
+
+Cancellation has no timeout operation.
+Sprout has no channel selection or scheduler control.
+A task that ignores cancellation can block `await` forever.
+Do not mutate captured lists, maps, or structs from multiple tasks.

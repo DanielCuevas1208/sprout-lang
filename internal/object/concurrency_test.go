@@ -66,6 +66,51 @@ func TestChannelCloseWakesBlockedSender(t *testing.T) {
 	}
 }
 
+func TestChannelContextCancellationWakesBlockedOperations(t *testing.T) {
+	ch := NewChannel(0)
+	cancel := make(chan struct{})
+	sendDone := make(chan error, 1)
+	go func() { sendDone <- ch.SendContext(cancel, Int{Value: 3}) }()
+	close(cancel)
+	select {
+	case err := <-sendDone:
+		if err != ErrCancelled {
+			t.Fatalf("send error = %v, want cancellation", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cancelled sender did not wake")
+	}
+
+	cancel = make(chan struct{})
+	receiveDone := make(chan error, 1)
+	go func() {
+		_, _, err := ch.ReceiveContext(cancel)
+		receiveDone <- err
+	}()
+	close(cancel)
+	select {
+	case err := <-receiveDone:
+		if err != ErrCancelled {
+			t.Fatalf("receive error = %v, want cancellation", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("cancelled receiver did not wake")
+	}
+}
+
+func TestCancelledTaskReportsCancellation(t *testing.T) {
+	task := NewTask()
+	task.Cancel()
+	task.Complete(Int{Value: 42}, nil)
+	value, err := task.Await()
+	if value != NilValue || err != ErrCancelled {
+		t.Fatalf("await = (%v, %v), want cancellation", value, err)
+	}
+	if !task.Cancelled() {
+		t.Fatal("task lost its cancellation state")
+	}
+	task.Cancel()
+}
 func TestTaskCompletesOnce(t *testing.T) {
 	task := NewTask()
 	go task.Complete(Int{Value: 42}, nil)

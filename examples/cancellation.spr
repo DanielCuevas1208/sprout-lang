@@ -1,0 +1,10 @@
+let gate = channel()
+let worker = spawn(fn() {
+    let signal = recv(gate)
+    if is_cancelled() {
+        return "stopped"
+    }
+    return signal
+})
+cancel(worker)
+print(unwrap_or(await(worker), "cancelled"))

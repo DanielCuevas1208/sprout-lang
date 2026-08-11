@@ -6,7 +6,8 @@ Version 0.2 added a stack-based bytecode virtual machine.
 Version 0.3 added file-based modules and a build tool.
 Version 0.4 added structs, methods, and interfaces.
 Version 0.5 added result types and pattern matching.
-Version 0.6 adds channels and tasks.
+Version 0.6 added channels and tasks.
+Version 0.7 adds cooperative task cancellation.
 The interpreter and the VM share one runtime and one standard library.
 Sprout produces friendly diagnostics that point at the exact problem.
 
@@ -20,6 +21,7 @@ The codebase is structured to grow cleanly over time.
 - Structs with methods and interface contracts.
 - Result values with `ok` and `err`.
 - Blocking channels and joinable tasks for concurrent functions.
+- Cooperative task cancellation that wakes blocked operations.
 - A `match` expression with wildcard and variable patterns.
 - A bytecode compiler and a stack-based virtual machine.
 - A tree-walking interpreter that shares the runtime with the VM.
@@ -205,7 +207,6 @@ See `docs/structs.md` for the full reference.
 ## Results and pattern matching
 
 Version 0.5 added result types and pattern matching.
-Version 0.6 adds channels and tasks.
 A result carries a value or an error message.
 Sprout has no exceptions.
 A function that can fail returns a result.
@@ -242,7 +243,8 @@ See `docs/results.md` for the full reference.
 
 ## Concurrency
 
-Version 0.6 adds channels and tasks.
+Version 0.6 added channels and tasks.
+Version 0.7 adds cooperative cancellation.
 A channel moves values between spawned functions.
 A task reports one spawned function.
 
@@ -265,11 +267,20 @@ The example prints this output.
 done
 ```
 
+A canceled task returns an error result.
+
+```text
+sprout run examples/cancellation.spr
+cancelled
+```
+
 `channel()` creates an unbuffered channel.
 Pass a non-negative integer to create a buffered channel.
 `recv` returns `ok(value)`, or `err("channel closed")` after close.
 `await` returns the worker value or its error as a result.
 Use `close` after all sends finish.
+Call `cancel(task)` to request cooperative cancellation.
+Call `is_cancelled()` inside long-running tasks.
 See `docs/concurrency.md` for the full reference.
 
 ## Modules
@@ -352,6 +363,7 @@ Version 0.3 runs modules on both engines.
 Version 0.4 runs structs and methods on both engines.
 Version 0.5 runs results and match on both engines.
 Version 0.6 runs channels and tasks on both engines.
+Version 0.7 runs cooperative cancellation on both engines.
 
 The `dis` command shows the compiled instructions.
 
@@ -382,6 +394,7 @@ Version 0.3 adds `module` for building module values.
 Version 0.4 adds no new builtins. The `type` function reports structs.
 Version 0.5 adds `ok`, `err`, `is_ok`, `is_err`, `unwrap`, and `unwrap_or`.
 Version 0.6 adds `channel`, `send`, `recv`, `close`, `spawn`, and `await`.
+Version 0.7 adds `cancel` and `is_cancelled`.
 
 ```sprout
 let nums = [1, 2, 3, 4]
@@ -407,6 +420,7 @@ The `examples` directory holds documented programs.
 - `structs.spr` uses structs, methods, and interfaces.
 - `results.spr` uses results and pattern matching.
 - `concurrency.spr` coordinates workers with channels and tasks.
+- `cancellation.spr` stops a blocked task cooperatively.
 - `guess.spr` is an interactive game.
 - `project` is a multi-file module project.
 
@@ -427,7 +441,7 @@ internal/parser  the Pratt parser
 internal/checker static analysis
 internal/module  the module loader and the manifest
 internal/build   the bundler
-internal/object  runtime values, structs, and module values
+internal/object  runtime values, tasks, cancellation, and module values
 internal/runtime value semantics and the standard library
 internal/interp  the tree-walking interpreter
 internal/code    opcodes and the instruction stream
@@ -489,13 +503,13 @@ All tests pass on Go 1.22 and newer.
 | `internal/compiler` | Bytecode for expressions, structs, and control flow. |
 | `internal/vm` | Execution, closures, structs, and runtime errors. |
 | `internal/diag` | Diagnostic rendering. |
-| `internal/object` | Channels, tasks, structs, and shared runtime values. |
-| `test` | Example goldens, engine parity, and command line. |
+| `internal/object` | Channels, tasks, cancellation, and shared runtime values. |
+| `test` | Example goldens, engine parity, cancellation, and command line. |
 
 The parity tests run each program on both engines.
 The VM tests match the same goldens as the interpreter.
 Module tests run projects and bundles on both engines.
-Concurrency tests cover blocking, close, task completion, and engine parity.
+Concurrency tests cover blocking, close, cancellation, task completion, and engine parity.
 Match programs run on both engines and must agree.
 Tests use only the standard library. They need no network or secrets.
 
@@ -522,7 +536,11 @@ Version 0.6 is complete. It added channels and joinable tasks.
 Channels wake blocked operations when callers close them.
 Both engines run the same concurrency examples.
 
-Version 0.7 remains open for cancellation, selection, and scheduler controls.
+Version 0.7 is complete. It adds cooperative task cancellation.
+Cancellation wakes blocked channel operations.
+Both engines run the same cancellation examples.
+
+Version 0.8 remains open for channel selection and scheduler controls.
 
 ## Limitations
 
@@ -539,7 +557,8 @@ Version 0.7 remains open for cancellation, selection, and scheduler controls.
 - Module resolution is file based. There is no package registry.
 - A bundle reprints module bodies. It does not compress them.
 - A match arm is a block. It cannot be a bare expression.
-- Tasks have no cancellation or timeout operation.
+- Cancellation is cooperative and has no timeout operation.
+- Channels have no selection or scheduler control.
 - A spawned function shares captured mutable values with its parent.
 - Do not mutate captured lists, maps, or structs from multiple tasks.
 - A program must await tasks that it needs before it exits.
