@@ -333,3 +333,26 @@ print(match fail() {
 		}
 	}
 }
+
+func TestEnginesAgreeOnSelect(t *testing.T) {
+	src := `let first = channel()
+let second = channel(1)
+send(second, 7)
+let event = unwrap(select([first, second]))
+print(event["index"], event["value"])
+close(first)
+close(second)
+print(unwrap_or(select([first, second]), "all closed"))`
+	ivOut, ivErr := runInterpSrc(src)
+	vmOut, vmErr := runVMSrc(src)
+	if ivErr != nil || vmErr != nil {
+		t.Fatalf("select errors: interpreter=%v vm=%v", ivErr, vmErr)
+	}
+	if ivOut != vmOut {
+		t.Fatalf("select engines differ: interp=%q vm=%q", ivOut, vmOut)
+	}
+	want := "1 7\nall closed\n"
+	if ivOut != want {
+		t.Fatalf("select output = %q, want %q", ivOut, want)
+	}
+}

@@ -3,6 +3,7 @@ package object
 import (
 	"errors"
 	"fmt"
+	"reflect"
 	"sync"
 )
 
@@ -14,19 +15,21 @@ var ErrCancelled = errors.New("task cancelled")
 // The channel uses blocking send and receive behavior. A close signal wakes
 // blocked operations without closing the value queue under a concurrent send.
 type Channel struct {
-	values  chan Object
-	done    chan struct{}
-	mu      sync.Mutex
-	senders sync.WaitGroup
-	closed  bool
+	values      chan Object
+	done        chan struct{}
+	sendersDone chan struct{}
+	mu          sync.Mutex
+	senders     sync.WaitGroup
+	closed      bool
 }
 
 // NewChannel creates a channel with capacity. Zero creates a rendezvous
 // channel.
 func NewChannel(capacity int) *Channel {
 	return &Channel{
-		values: make(chan Object, capacity),
-		done:   make(chan struct{}),
+		values:      make(chan Object, capacity),
+		done:        make(chan struct{}),
+		sendersDone: make(chan struct{}),
 	}
 }
 
@@ -81,8 +84,13 @@ func (c *Channel) ReceiveContext(done <-chan struct{}) (Object, bool, error) {
 		select {
 		case value := <-c.values:
 			return value, true, nil
-		default:
-			return NilValue, false, nil
+		case <-c.sendersDone:
+			select {
+			case value := <-c.values:
+				return value, true, nil
+			default:
+				return NilValue, false, nil
+			}
 		}
 	case <-done:
 		return NilValue, false, ErrCancelled
@@ -100,7 +108,86 @@ func (c *Channel) Close() error {
 	close(c.done)
 	c.mu.Unlock()
 	c.senders.Wait()
+	close(c.sendersDone)
 	return nil
+}
+
+// SelectReceive waits for one value from channels.
+//
+// It returns the original channel index and skips channels that close without
+// a buffered value. When every channel closes, open is false. A nil done
+// channel disables cancellation.
+func SelectReceive(channels []*Channel, done <-chan struct{}) (index int, value Object, open bool, err error) {
+	if len(channels) == 0 {
+		return -1, NilValue, false, fmt.Errorf("select() expects at least one channel")
+	}
+
+	// Each channel contributes a value case and a close case. The close case
+	// lets selection remove closed channels without closing the value queue.
+	cases := make([]reflect.SelectCase, 0, len(channels)*2+1)
+	caseChannels := make([]int, 0, cap(cases))
+	for i, channel := range channels {
+		if channel == nil {
+			return -1, NilValue, false, fmt.Errorf("select() channel %d is nil", i)
+		}
+		cases = append(cases,
+			reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(channel.values)},
+			reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(channel.done)},
+		)
+		caseChannels = append(caseChannels, i, i)
+	}
+	if done != nil {
+		cases = append(cases, reflect.SelectCase{Dir: reflect.SelectRecv, Chan: reflect.ValueOf(done)})
+		caseChannels = append(caseChannels, -1)
+	}
+
+	for len(cases) > 0 {
+		chosen, value, received := reflect.Select(cases)
+		channelIndex := caseChannels[chosen]
+		if channelIndex < 0 {
+			return -1, NilValue, false, ErrCancelled
+		}
+
+		// A value case is never closed by Channel.Close, so received is true.
+		// Keep the check to make this helper safe if the channel internals change.
+		if received {
+			objectValue, ok := value.Interface().(Object)
+			if !ok {
+				return -1, NilValue, false, fmt.Errorf("select() received an invalid value")
+			}
+			return channelIndex, objectValue, true, nil
+		}
+
+		channel := channels[channelIndex]
+		// Close waits for senders after it closes done. Wait before draining so a
+		// concurrent sender cannot be mistaken for a closed channel.
+		<-channel.sendersDone
+		select {
+		case value := <-channel.values:
+			return channelIndex, value, true, nil
+		default:
+		}
+
+		// Remove both cases for this closed channel, then wait on the rest.
+		for i := len(cases) - 1; i >= 0; i-- {
+			if caseChannels[i] == channelIndex {
+				cases = append(cases[:i], cases[i+1:]...)
+				caseChannels = append(caseChannels[:i], caseChannels[i+1:]...)
+			}
+		}
+		hasChannel := false
+		for _, index := range caseChannels {
+			if index >= 0 {
+				hasChannel = true
+				break
+			}
+		}
+		if !hasChannel {
+			return -1, NilValue, false, nil
+		}
+	}
+
+	return -1, NilValue, false, nil
 }
 
 // Task is a handle for one spawned function.

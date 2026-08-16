@@ -387,7 +387,7 @@ func (c *checker) staticType(sc *scope, e ast.Expr) string {
 			if id.Name == "ok" || id.Name == "err" {
 				return "result"
 			}
-			if id.Name == "recv" || id.Name == "await" {
+			if id.Name == "recv" || id.Name == "await" || id.Name == "select" {
 				return "result"
 			}
 			if id.Name == "channel" {

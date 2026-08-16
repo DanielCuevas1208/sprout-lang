@@ -629,6 +629,38 @@ func builtinRecv(ctx *Context, args []object.Object, pos source.Pos) (object.Obj
 	return object.Result{Ok: true, Value: value}, nil
 }
 
+// builtinSelect waits for a value from one of the channels in a list.
+// It returns ok({"index": i, "value": value}), or an error result when
+// every channel closes or the current task is cancelled.
+func builtinSelect(ctx *Context, args []object.Object, pos source.Pos) (object.Object, error) {
+	list, ok := args[0].(*object.List)
+	if !ok {
+		return nil, FmtErr("select() expects a list of channels, got %s", args[0].Type())
+	}
+	channels := make([]*object.Channel, len(list.Elems))
+	for i, value := range list.Elems {
+		channel, ok := value.(*object.Channel)
+		if !ok {
+			return nil, FmtErr("select() item %d must be a channel, got %s", i, value.Type())
+		}
+		channels[i] = channel
+	}
+	index, value, open, err := object.SelectReceive(channels, ctx.Done)
+	if err != nil {
+		if err == object.ErrCancelled {
+			return object.Result{Ok: false, Message: err.Error()}, nil
+		}
+		return nil, err
+	}
+	if !open {
+		return object.Result{Ok: false, Message: "all channels closed"}, nil
+	}
+	selection := &object.Map{Vals: make(map[string]object.Object)}
+	selection.Set("index", object.Int{Value: int64(index)})
+	selection.Set("value", value)
+	return object.Result{Ok: true, Value: selection}, nil
+}
+
 // builtinClose closes a channel and wakes blocked receivers.
 func builtinClose(ctx *Context, args []object.Object, pos source.Pos) (object.Object, error) {
 	ch, ok := args[0].(*object.Channel)

@@ -130,6 +130,7 @@ var Builtins = []*Builtin{
 	{Name: "unwrap", MinArgs: 1, MaxArgs: 1, Fn: builtinUnwrap},
 	{Name: "unwrap_or", MinArgs: 2, MaxArgs: 2, Fn: builtinUnwrapOr},
 	{Name: "channel", MinArgs: 0, MaxArgs: 1, Fn: builtinChannel},
+	{Name: "select", MinArgs: 1, MaxArgs: 1, Fn: builtinSelect},
 	{Name: "send", MinArgs: 2, MaxArgs: 2, Fn: builtinSend},
 	{Name: "recv", MinArgs: 1, MaxArgs: 1, Fn: builtinRecv},
 	{Name: "close", MinArgs: 1, MaxArgs: 1, Fn: builtinClose},

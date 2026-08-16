@@ -1,6 +1,6 @@
 # Concurrency
 
-Sprout 0.7 provides channels, tasks, and cooperative cancellation.
+Sprout 0.8 provides channels, tasks, cooperative cancellation, and channel selection.
 
 ## Channels
 
@@ -54,6 +54,38 @@ The program prints the following line.
 cancelled
 ```
 
+
+## Selection
+
+Use `select` to wait on several channels.
+Pass one list of channels.
+The function skips closed channels without buffered values.
+
+It returns `ok` with a map when a value arrives.
+The map contains `index` and `value` keys.
+The index keeps the input list position.
+
+```sprout
+let left = channel()
+let right = channel(1)
+send(right, "ready")
+let event = unwrap(select([left, right]))
+print(event["index"], event["value"])
+close(left)
+close(right)
+print(unwrap_or(select([left, right]), "all closed"))
+```
+
+The program prints this output.
+
+```text
+1 ready
+all closed
+```
+
+When every channel closes, `select` returns `err("all channels closed")`.
+Cancellation returns `err("task cancelled")`.
+
 ## Execution model
 
 Each task uses a child interpreter or VM context.
@@ -67,6 +99,6 @@ Await every task that the program needs.
 ## Limitations
 
 Cancellation has no timeout operation.
-Sprout has no channel selection or scheduler control.
+Sprout has no scheduler controls.
 A task that ignores cancellation can block `await` forever.
 Do not mutate captured lists, maps, or structs from multiple tasks.

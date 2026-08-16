@@ -123,3 +123,64 @@ func TestTaskCompletesOnce(t *testing.T) {
 		t.Fatalf("second await = (%v, %v)", value, err)
 	}
 }
+
+func TestSelectReceiveChoosesReadyChannel(t *testing.T) {
+	slow := NewChannel(0)
+	ready := NewChannel(1)
+	if err := ready.Send(Int{Value: 7}); err != nil {
+		t.Fatal(err)
+	}
+	index, value, open, err := SelectReceive([]*Channel{slow, ready}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !open || index != 1 || value != (Int{Value: 7}) {
+		t.Fatalf("selection = (%d, %v, %v), want (1, 7, true)", index, value, open)
+	}
+	if err := slow.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := ready.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestSelectReceiveSkipsClosedChannels(t *testing.T) {
+	closed := NewChannel(0)
+	ready := NewChannel(1)
+	if err := closed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := ready.Send(Str{Value: "ready"}); err != nil {
+		t.Fatal(err)
+	}
+	index, value, open, err := SelectReceive([]*Channel{closed, ready}, nil)
+	if err != nil || !open || index != 1 || value.String() != "ready" {
+		t.Fatalf("selection = (%d, %v, %v, %v)", index, value, open, err)
+	}
+	if err := ready.Close(); err != nil {
+		t.Fatal(err)
+	}
+	index, value, open, err = SelectReceive([]*Channel{closed, ready}, make(chan struct{}))
+	if err != nil || open || index != -1 || value != NilValue {
+		t.Fatalf("closed selection = (%d, %v, %v, %v)", index, value, open, err)
+	}
+}
+
+func TestSelectReceiveHonorsCancellation(t *testing.T) {
+	done := make(chan struct{})
+	result := make(chan error, 1)
+	go func() {
+		_, _, _, err := SelectReceive([]*Channel{NewChannel(0)}, done)
+		result <- err
+	}()
+	close(done)
+	select {
+	case err := <-result:
+		if err != ErrCancelled {
+			t.Fatalf("error = %v, want cancellation", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("selection did not wake after cancellation")
+	}
+}

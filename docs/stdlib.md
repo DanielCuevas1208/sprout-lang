@@ -1,6 +1,6 @@
 # Standard Library
 
-This page lists the built-in functions of Sprout 0.7.
+This page lists the built-in functions of Sprout 0.8.
 They are available in every program without an import.
 
 ## Output
@@ -117,6 +117,7 @@ Programs can use it to build module values dynamically.
 | `channel(capacity?)` | Creates a blocking or buffered channel. |
 | `send(channel, value)` | Sends one value and waits for a receiver. |
 | `recv(channel)` | Receives a result from a channel. |
+| `select(channels)` | Waits for a value from several channels. |
 | `close(channel)` | Closes a channel. |
 | `spawn(fn)` | Starts a zero-argument function as a task. |
 | `await(task)` | Waits for a task and returns a result. |
@@ -127,6 +128,9 @@ Programs can use it to build module values dynamically.
 It returns `err("channel closed")` after close.
 `await` returns the worker value or an error result.
 `cancel` wakes blocked operations when cancellation reaches a task.
+`select` returns `ok({"index": i, "value": v})` for a value.
+It returns `err("all channels closed")` when no channel remains.
+It skips closed channels without buffered values.
 See `docs/concurrency.md` for the full reference.
 
 ## Assertions

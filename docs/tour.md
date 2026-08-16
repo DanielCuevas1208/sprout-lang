@@ -309,7 +309,7 @@ print(describe(42))      // the number 42
 ```
 
 Read `docs/results.md` for the full reference.
-Read `docs/concurrency.md` for channels and tasks.
+Read `docs/concurrency.md` for channels, tasks, and selection.
 
 ## Assertions
 
@@ -376,6 +376,7 @@ Sprout 0.4 runs structs and methods on both engines.
 Sprout 0.5 runs results and match on both engines.
 Sprout 0.6 runs channels and tasks on both engines.
 Sprout 0.7 runs cooperative cancellation on both engines.
+Sprout 0.8 runs channel selection on both engines.
 It shares the parser, the checker, and the standard library with the
 interpreter. The two engines produce the same results.
 

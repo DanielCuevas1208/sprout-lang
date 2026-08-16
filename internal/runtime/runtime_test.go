@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/sprout-lang/sprout/internal/object"
+	"github.com/sprout-lang/sprout/internal/source"
 )
 
 func mustValue(t *testing.T, fn func() (object.Object, error)) object.Object {
@@ -291,5 +292,51 @@ func TestBuiltinArgContract(t *testing.T) {
 	}
 	if err := b.CheckArgs([]object.Object{intVal(1), intVal(2), intVal(3)}, "set"); err != nil {
 		t.Errorf("valid args failed: %v", err)
+	}
+}
+
+func TestBuiltinSelectResult(t *testing.T) {
+	first := object.NewChannel(0)
+	second := object.NewChannel(1)
+	if err := second.Send(object.Int{Value: 9}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := builtinSelect(&Context{}, []object.Object{
+		&object.List{Elems: []object.Object{first, second}},
+	}, source.Pos{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, ok := got.(object.Result)
+	if !ok || !result.Ok {
+		t.Fatalf("select result = %v, want ok", got)
+	}
+	selection, ok := result.Value.(*object.Map)
+	if !ok {
+		t.Fatalf("selection value = %T, want map", result.Value)
+	}
+	index, indexOK := selection.Get("index")
+	value, valueOK := selection.Get("value")
+	if !indexOK || !valueOK || !Equal(index, object.Int{Value: 1}) || !Equal(value, object.Int{Value: 9}) {
+		t.Fatalf("selection = %v, want index 1 and value 9", selection)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := second.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	closed := object.NewChannel(0)
+	if err := closed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	got, err = builtinSelect(&Context{}, []object.Object{&object.List{Elems: []object.Object{closed}}}, source.Pos{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, ok = got.(object.Result)
+	if !ok || result.Ok || result.Message != "all channels closed" {
+		t.Fatalf("closed select result = %v, want all-channels-closed error", got)
 	}
 }
