@@ -1,6 +1,6 @@
 # Concurrency
 
-Sprout 0.8 provides channels, tasks, cooperative cancellation, and channel selection.
+Sprout 0.9 provides channels, tasks, cancellation, selection, and scheduler controls.
 
 ## Channels
 
@@ -86,6 +86,28 @@ all closed
 When every channel closes, `select` returns `err("all channels closed")`.
 Cancellation returns `err("task cancelled")`.
 
+## Scheduler controls
+
+`yield()` gives another runnable task a scheduling opportunity.
+It returns nil after the opportunity.
+
+`sleep(milliseconds)` pauses the current task for a wall-clock duration.
+It uses milliseconds.
+A zero duration acts like `yield()`.
+Sleeping does not stop other tasks.
+Cancellation stops the current task during either operation.
+
+```sprout
+let task = spawn(fn() {
+    sleep(1000)
+    return "finished"
+})
+cancel(task)
+print(unwrap_or(await(task), "cancelled"))
+```
+
+The program prints `cancelled`.
+
 ## Execution model
 
 Each task uses a child interpreter or VM context.
@@ -99,6 +121,8 @@ Await every task that the program needs.
 ## Limitations
 
 Cancellation has no timeout operation.
-Sprout has no scheduler controls.
+The scheduler policy cannot be configured.
+`yield()` does not guarantee that another task runs immediately.
+`sleep()` uses wall-clock time, so wake order is not a timing contract.
 A task that ignores cancellation can block `await` forever.
 Do not mutate captured lists, maps, or structs from multiple tasks.

@@ -709,3 +709,23 @@ func builtinCancel(ctx *Context, args []object.Object, pos source.Pos) (object.O
 func builtinIsCancelled(ctx *Context, args []object.Object, pos source.Pos) (object.Object, error) {
 	return object.Bool{Value: ctx.Cancelled()}, nil
 }
+
+// builtinYield gives another task a scheduling opportunity.
+func builtinYield(ctx *Context, args []object.Object, pos source.Pos) (object.Object, error) {
+	if err := schedulerYield(ctx); err != nil {
+		return nil, err
+	}
+	return object.NilValue, nil
+}
+
+// builtinSleep pauses the current task for milliseconds.
+func builtinSleep(ctx *Context, args []object.Object, pos source.Pos) (object.Object, error) {
+	milliseconds, ok := AsIntIndex(args[0])
+	if !ok {
+		return nil, FmtErr("sleep() duration must be an integer, got %s", args[0].Type())
+	}
+	if err := schedulerSleep(ctx, milliseconds); err != nil {
+		return nil, err
+	}
+	return object.NilValue, nil
+}

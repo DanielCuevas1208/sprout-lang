@@ -1,6 +1,6 @@
 # Standard Library
 
-This page lists the built-in functions of Sprout 0.8.
+This page lists the built-in functions of Sprout 0.9.
 They are available in every program without an import.
 
 ## Output
@@ -123,6 +123,8 @@ Programs can use it to build module values dynamically.
 | `await(task)` | Waits for a task and returns a result. |
 | `cancel(task)` | Requests cooperative cancellation. |
 | `is_cancelled()` | Reports current task cancellation. |
+| `yield()` | Gives another task a scheduling opportunity. |
+| `sleep(milliseconds)` | Pauses the current task for milliseconds. |
 
 `recv` returns `ok(value)` for a value.
 It returns `err("channel closed")` after close.
@@ -131,6 +133,8 @@ It returns `err("channel closed")` after close.
 `select` returns `ok({"index": i, "value": v})` for a value.
 It returns `err("all channels closed")` when no channel remains.
 It skips closed channels without buffered values.
+`yield` does not guarantee a task switch.
+`sleep` observes cancellation and uses wall-clock time.
 See `docs/concurrency.md` for the full reference.
 
 ## Assertions

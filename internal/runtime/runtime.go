@@ -138,6 +138,8 @@ var Builtins = []*Builtin{
 	{Name: "await", MinArgs: 1, MaxArgs: 1, Fn: builtinAwait},
 	{Name: "cancel", MinArgs: 1, MaxArgs: 1, Fn: builtinCancel},
 	{Name: "is_cancelled", MinArgs: 0, MaxArgs: 0, Fn: builtinIsCancelled},
+	{Name: "yield", MinArgs: 0, MaxArgs: 0, Fn: builtinYield},
+	{Name: "sleep", MinArgs: 1, MaxArgs: 1, Fn: builtinSleep},
 }
 
 // Names lists the standard library function names.

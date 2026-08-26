@@ -340,3 +340,34 @@ func TestBuiltinSelectResult(t *testing.T) {
 		t.Fatalf("closed select result = %v, want all-channels-closed error", got)
 	}
 }
+
+func TestSchedulerControls(t *testing.T) {
+	if got, err := builtinYield(&Context{}, nil, source.Pos{}); err != nil || got != object.NilValue {
+		t.Fatalf("yield() = (%v, %v), want nil", got, err)
+	}
+	if got, err := builtinSleep(&Context{}, []object.Object{intVal(0)}, source.Pos{}); err != nil || got != object.NilValue {
+		t.Fatalf("sleep(0) = (%v, %v), want nil", got, err)
+	}
+	if got, err := builtinSleep(&Context{}, []object.Object{intVal(1)}, source.Pos{}); err != nil || got != object.NilValue {
+		t.Fatalf("sleep(1) = (%v, %v), want nil", got, err)
+	}
+	if _, err := builtinSleep(&Context{}, []object.Object{object.Str{Value: "1"}}, source.Pos{}); err == nil || !strings.Contains(err.Error(), "must be an integer") {
+		t.Fatalf("sleep() type error = %v", err)
+	}
+	if _, err := builtinSleep(&Context{}, []object.Object{intVal(-1)}, source.Pos{}); err == nil || !strings.Contains(err.Error(), "cannot be negative") {
+		t.Fatalf("sleep() negative error = %v", err)
+	}
+	if _, err := builtinSleep(&Context{}, []object.Object{intVal(maxSleepMilliseconds + 1)}, source.Pos{}); err == nil || !strings.Contains(err.Error(), "too large") {
+		t.Fatalf("sleep() large error = %v", err)
+	}
+
+	done := make(chan struct{})
+	close(done)
+	ctx := &Context{Done: done}
+	if _, err := builtinYield(ctx, nil, source.Pos{}); err != object.ErrCancelled {
+		t.Fatalf("cancelled yield() error = %v, want cancellation", err)
+	}
+	if _, err := builtinSleep(ctx, []object.Object{intVal(1000)}, source.Pos{}); err != object.ErrCancelled {
+		t.Fatalf("cancelled sleep() error = %v, want cancellation", err)
+	}
+}

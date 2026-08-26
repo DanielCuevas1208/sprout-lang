@@ -377,6 +377,7 @@ Sprout 0.5 runs results and match on both engines.
 Sprout 0.6 runs channels and tasks on both engines.
 Sprout 0.7 runs cooperative cancellation on both engines.
 Sprout 0.8 runs channel selection on both engines.
+Sprout 0.9 runs scheduler controls on both engines.
 It shares the parser, the checker, and the standard library with the
 interpreter. The two engines produce the same results.
 
@@ -393,6 +394,29 @@ sprout dis examples/hello.spr
 ```
 
 Read `docs/bytecode.md` for the full VM reference.
+
+## Scheduler controls
+
+Use `yield()` to give another task a scheduling opportunity.
+Use `sleep(milliseconds)` to pause the current task.
+Both controls observe cooperative cancellation.
+
+```sprout
+let events = channel(1)
+let worker = spawn(fn() {
+    send(events, "ready")
+    yield()
+    sleep(1)
+    send(events, "done")
+})
+print(unwrap(recv(events)))
+print(unwrap(recv(events)))
+print(unwrap(await(worker)))
+close(events)
+```
+
+The program prints `ready`, `done`, and `nil`.
+Read `docs/concurrency.md` for cancellation and scheduling details.
 
 ## Next steps
 

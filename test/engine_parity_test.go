@@ -356,3 +356,36 @@ print(unwrap_or(select([first, second]), "all closed"))`
 		t.Fatalf("select output = %q, want %q", ivOut, want)
 	}
 }
+
+func TestEnginesAgreeOnSchedulerControls(t *testing.T) {
+	src := `let events = channel(1)
+let worker = spawn(fn() {
+    send(events, "started")
+    yield()
+    sleep(1)
+    send(events, "finished")
+    return "done"
+})
+print(unwrap(recv(events)))
+print(unwrap(recv(events)))
+print(unwrap(await(worker)))
+let canceled = spawn(fn() {
+    sleep(1000)
+    return "finished"
+})
+cancel(canceled)
+print(unwrap_or(await(canceled), "cancelled"))
+close(events)`
+	ivOut, ivErr := runInterpSrc(src)
+	vmOut, vmErr := runVMSrc(src)
+	if ivErr != nil || vmErr != nil {
+		t.Fatalf("scheduler errors: interpreter=%v vm=%v", ivErr, vmErr)
+	}
+	if ivOut != vmOut {
+		t.Fatalf("scheduler engines differ: interp=%q vm=%q", ivOut, vmOut)
+	}
+	want := "started\nfinished\ndone\ncancelled\n"
+	if ivOut != want {
+		t.Fatalf("scheduler output = %q, want %q", ivOut, want)
+	}
+}

@@ -8,7 +8,8 @@ Version 0.4 added structs, methods, and interfaces.
 Version 0.5 added result types and pattern matching.
 Version 0.6 added channels and tasks.
 Version 0.7 added cooperative task cancellation.
-Version 0.8 adds channel selection.
+Version 0.8 added channel selection.
+Version 0.9 adds scheduler controls.
 The interpreter and the VM share one runtime and one standard library.
 Sprout produces friendly diagnostics that point at the exact problem.
 
@@ -24,6 +25,7 @@ The codebase is structured to grow cleanly over time.
 - Blocking channels and joinable tasks for concurrent functions.
 - Cooperative task cancellation that wakes blocked operations.
 - Channel selection for deterministic fan-in programs.
+- Scheduler controls for fair task handoff and cancellable pauses.
 - A `match` expression with wildcard and variable patterns.
 - A bytecode compiler and a stack-based virtual machine.
 - A tree-walking interpreter that shares the runtime with the VM.
@@ -247,7 +249,8 @@ See `docs/results.md` for the full reference.
 
 Version 0.6 added channels and tasks.
 Version 0.7 added cooperative cancellation.
-Version 0.8 adds channel selection.
+Version 0.8 added channel selection.
+Version 0.9 adds scheduler controls.
 A channel moves values between spawned functions.
 A task reports one spawned function.
 
@@ -306,6 +309,34 @@ The example prints this output.
 ```text
 1 ready
 all closed
+```
+
+Use `yield()` to give another task a scheduling opportunity.
+Use `sleep(milliseconds)` to pause the current task without blocking its peers.
+Both controls observe cooperative cancellation.
+
+```sprout
+let events = channel(1)
+let worker = spawn(fn() {
+    send(events, "started")
+    yield()
+    sleep(1)
+    send(events, "finished")
+    return "done"
+})
+
+print(unwrap(recv(events)))
+print(unwrap(recv(events)))
+print(unwrap(await(worker)))
+close(events)
+```
+
+The example prints this output.
+
+```text
+started
+finished
+done
 ```
 
 See `docs/concurrency.md` for the full reference.
@@ -392,6 +423,7 @@ Version 0.5 runs results and match on both engines.
 Version 0.6 runs channels and tasks on both engines.
 Version 0.7 runs cooperative cancellation on both engines.
 Version 0.8 runs channel selection on both engines.
+Version 0.9 runs scheduler controls on both engines.
 
 The `dis` command shows the compiled instructions.
 
@@ -424,6 +456,7 @@ Version 0.5 adds `ok`, `err`, `is_ok`, `is_err`, `unwrap`, and `unwrap_or`.
 Version 0.6 adds `channel`, `send`, `recv`, `close`, `spawn`, and `await`.
 Version 0.7 added `cancel` and `is_cancelled`.
 Version 0.8 adds `select`.
+Version 0.9 adds `yield` and `sleep`.
 
 ```sprout
 let nums = [1, 2, 3, 4]
@@ -451,6 +484,7 @@ The `examples` directory holds documented programs.
 - `concurrency.spr` coordinates workers with channels and tasks.
 - `cancellation.spr` stops a blocked task cooperatively.
 - `select.spr` fans in values from several channels.
+- `scheduler.spr` gives tasks explicit scheduling opportunities.
 - `guess.spr` is an interactive game.
 - `project` is a multi-file module project.
 
@@ -472,7 +506,7 @@ internal/checker static analysis
 internal/module  the module loader and the manifest
 internal/build   the bundler
 internal/object  runtime values, tasks, cancellation, selection, and modules
-internal/runtime value semantics and the standard library
+internal/runtime value semantics, standard library, and scheduler controls
 internal/interp  the tree-walking interpreter
 internal/code    opcodes and the instruction stream
 internal/compiler  bytecode compiler
@@ -517,7 +551,7 @@ go test ./internal/vm/
 
 ## Test status
 
-All tests pass on Go 1.22 and newer.
+CI checks formatting, module files, vet, builds, tests, and race safety.
 
 | Suite | Scope |
 |-------|-------|
@@ -527,7 +561,7 @@ All tests pass on Go 1.22 and newer.
 | `internal/ast` | Source printer round trips. |
 | `internal/module` | Loading, resolution, cycles, and manifests. |
 | `internal/build` | Bundle output and reserved names. |
-| `internal/runtime` | Arithmetic, comparison, indexing, members, results, and concurrency. |
+| `internal/runtime` | Arithmetic, comparison, indexing, members, results, concurrency, and scheduling. |
 | `internal/interp` | Evaluation, closures, structs, and runtime errors. |
 | `internal/code` | Opcodes, the builder, and disassembly. |
 | `internal/compiler` | Bytecode for expressions, structs, and control flow. |
@@ -539,7 +573,7 @@ All tests pass on Go 1.22 and newer.
 The parity tests run each program on both engines.
 The VM tests match the same goldens as the interpreter.
 Module tests run projects and bundles on both engines.
-Concurrency tests cover blocking, close, cancellation, selection, task completion, and engine parity.
+Concurrency tests cover blocking, close, cancellation, selection, scheduler controls, task completion, and engine parity.
 Match programs run on both engines and must agree.
 Tests use only the standard library. They need no network or secrets.
 
@@ -570,11 +604,16 @@ Version 0.7 is complete. It added cooperative task cancellation.
 Cancellation wakes blocked channel operations.
 Both engines run the same cancellation examples.
 
-Version 0.8 is complete. It adds channel selection.
+Version 0.8 is complete. It added channel selection.
 Selection waits on several channels and reports the selected index.
 Both engines run the same selection examples.
 
-Version 0.9 remains open for scheduler controls.
+Version 0.9 is complete. It adds scheduler controls.
+`yield()` gives another task a scheduling opportunity.
+`sleep(milliseconds)` pauses one task and observes cancellation.
+Both engines run the same scheduler examples.
+
+Version 1.0 remains open for configurable scheduler policies and stronger task isolation.
 
 ## Limitations
 
@@ -592,7 +631,9 @@ Version 0.9 remains open for scheduler controls.
 - A bundle reprints module bodies. It does not compress them.
 - A match arm is a block. It cannot be a bare expression.
 - Cancellation is cooperative and has no timeout operation.
-- Channels have no scheduler controls.
+- The scheduler policy cannot be configured.
+- `yield()` does not guarantee that another task runs immediately.
+- `sleep()` uses wall-clock time, so wake order is not a timing contract.
 - A spawned function shares captured mutable values with its parent.
 - Do not mutate captured lists, maps, or structs from multiple tasks.
 - A program must await tasks that it needs before it exits.
