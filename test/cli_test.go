@@ -78,7 +78,7 @@ func TestVersion(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("version exit code %d", code)
 	}
-	if !strings.Contains(out, "0.9.0") {
+	if !strings.Contains(out, "0.10.0") {
 		t.Errorf("version output: %q", out)
 	}
 }
@@ -100,6 +100,29 @@ func TestRunVM(t *testing.T) {
 	}
 	if !strings.Contains(out, "fizzbuzz") {
 		t.Errorf("output: %q", out)
+	}
+}
+
+func TestSchedulerPolicyFlag(t *testing.T) {
+	want := "started\nfinished\ndone\n"
+	for _, command := range []string{"run", "vm"} {
+		out, errOut, code := runCLI(t, "", command, "-scheduler", "direct",
+			filepath.Join("..", "examples", "scheduler.spr"))
+		if code != 0 {
+			t.Fatalf("%s exit code %d: %s", command, code, errOut)
+		}
+		if out != want {
+			t.Errorf("%s output = %q, want %q", command, out, want)
+		}
+	}
+
+	_, errOut, code := runCLI(t, "", "run", "-scheduler", "random",
+		filepath.Join("..", "examples", "hello.spr"))
+	if code != 2 {
+		t.Fatalf("invalid scheduler exit code = %d, want 2", code)
+	}
+	if !strings.Contains(errOut, "choose fair or direct") {
+		t.Errorf("invalid scheduler error: %q", errOut)
 	}
 }
 

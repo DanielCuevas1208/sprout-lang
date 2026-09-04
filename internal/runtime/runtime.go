@@ -8,6 +8,7 @@
 // An engine provides a Context with its streams and a Call hook. The Call
 // hook runs a function value with a set of arguments. Engines use the hook
 // to call user functions from higher-order builtins such as map and fold.
+// The context can also carry a scheduler for task controls.
 package runtime
 
 import (
@@ -37,6 +38,10 @@ type Context struct {
 
 	// Done closes when the current task receives a cancellation request.
 	Done <-chan struct{}
+
+	// Scheduler controls yield() and sleep(). Engines share it with child
+	// contexts so one policy applies to the whole task tree.
+	Scheduler Scheduler
 
 	// Spawn starts fn in a separate execution context. The hook returns a task
 	// handle so the spawn builtin stays independent of either engine.

@@ -117,15 +117,25 @@ func New() *VM {
 func NewWithIO(stdin io.Reader, stdout, stderr io.Writer) *VM {
 	vm := &VM{}
 	vm.ctx = runtime.Context{
-		Stdin:  stdin,
-		Stdout: stdout,
-		Stderr: stderr,
+		Stdin:     stdin,
+		Stdout:    stdout,
+		Stderr:    stderr,
+		Scheduler: runtime.DefaultScheduler(),
 		Call: func(fn object.Object, args []object.Object, pos source.Pos) object.Object {
 			return vm.callValue(fn, args, pos)
 		},
 		Spawn: vm.spawn,
 	}
 	return vm
+}
+
+// SetScheduler configures scheduling for this VM and its child tasks. A nil
+// scheduler restores the default fair policy.
+func (vm *VM) SetScheduler(s runtime.Scheduler) {
+	if s == nil {
+		s = runtime.DefaultScheduler()
+	}
+	vm.ctx.Scheduler = s
 }
 
 // Run executes the compiled program.

@@ -1,6 +1,6 @@
 # Concurrency
 
-Sprout 0.9 provides channels, tasks, cancellation, selection, and scheduler controls.
+Sprout 0.10 provides channels, tasks, cancellation, selection, and scheduler policies.
 
 ## Channels
 
@@ -108,6 +108,22 @@ print(unwrap_or(await(task), "cancelled"))
 
 The program prints `cancelled`.
 
+## Scheduler policies
+
+Choose a policy with `-scheduler fair` or `-scheduler direct`.
+Use the flag with `run` or `vm`.
+
+`fair` is the default policy.
+It asks the Go scheduler to run another task at `yield()`.
+`direct` skips that explicit handoff.
+
+Both policies keep cancellation checks.
+The interpreter, VM, and child tasks use one policy.
+
+```text
+sprout vm -scheduler direct examples/scheduler.spr
+```
+
 ## Execution model
 
 Each task uses a child interpreter or VM context.
@@ -121,8 +137,8 @@ Await every task that the program needs.
 ## Limitations
 
 Cancellation has no timeout operation.
-The scheduler policy cannot be configured.
 `yield()` does not guarantee that another task runs immediately.
+The `direct` policy does not force a task handoff.
 `sleep()` uses wall-clock time, so wake order is not a timing contract.
 A task that ignores cancellation can block `await` forever.
 Do not mutate captured lists, maps, or structs from multiple tasks.

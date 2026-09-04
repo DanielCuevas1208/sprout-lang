@@ -1,6 +1,6 @@
 # Standard Library
 
-This page lists the built-in functions of Sprout 0.9.
+This page lists the built-in functions of Sprout 0.10.
 They are available in every program without an import.
 
 ## Output
@@ -135,6 +135,7 @@ It returns `err("all channels closed")` when no channel remains.
 It skips closed channels without buffered values.
 `yield` does not guarantee a task switch.
 `sleep` observes cancellation and uses wall-clock time.
+Use `-scheduler fair` or `-scheduler direct` with `run` and `vm`.
 See `docs/concurrency.md` for the full reference.
 
 ## Assertions

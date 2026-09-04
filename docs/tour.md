@@ -378,6 +378,7 @@ Sprout 0.6 runs channels and tasks on both engines.
 Sprout 0.7 runs cooperative cancellation on both engines.
 Sprout 0.8 runs channel selection on both engines.
 Sprout 0.9 runs scheduler controls on both engines.
+Sprout 0.10 runs configurable scheduler policies on both engines.
 It shares the parser, the checker, and the standard library with the
 interpreter. The two engines produce the same results.
 
@@ -417,6 +418,15 @@ close(events)
 
 The program prints `ready`, `done`, and `nil`.
 Read `docs/concurrency.md` for cancellation and scheduling details.
+
+Choose the task handoff policy when you run a program.
+
+```text
+sprout run -scheduler direct examples/scheduler.spr
+```
+
+The default `fair` policy calls the Go scheduler at `yield()`.
+The `direct` policy skips that explicit handoff.
 
 ## Next steps
 

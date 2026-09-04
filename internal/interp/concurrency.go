@@ -19,6 +19,7 @@ func (iv *Interpreter) spawn(fn object.Object, args []object.Object, pos source.
 	go func() {
 		child := NewWithIO(iv.ctx.Stdin, iv.ctx.Stdout, iv.ctx.Stderr)
 		child.ctx.Done = task.Done()
+		child.ctx.Scheduler = iv.ctx.Scheduler
 		child.resolver = iv.resolver
 		var value object.Object
 		var err error

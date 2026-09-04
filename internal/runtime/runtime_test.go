@@ -17,6 +17,65 @@ func mustValue(t *testing.T, fn func() (object.Object, error)) object.Object {
 	return v
 }
 
+type recordingScheduler struct {
+	yieldCalls int
+	sleepCalls int
+	duration   int64
+}
+
+func (s *recordingScheduler) Yield(ctx *Context) error {
+	s.yieldCalls++
+	return nil
+}
+
+func (s *recordingScheduler) Sleep(ctx *Context, milliseconds int64) error {
+	s.sleepCalls++
+	s.duration = milliseconds
+	return nil
+}
+
+func TestSchedulerCanBeInjected(t *testing.T) {
+	scheduler := &recordingScheduler{}
+	ctx := &Context{Scheduler: scheduler}
+
+	if _, err := builtinYield(ctx, nil, source.Pos{}); err != nil {
+		t.Fatalf("injected yield() error = %v", err)
+	}
+	if _, err := builtinSleep(ctx, []object.Object{intVal(12)}, source.Pos{}); err != nil {
+		t.Fatalf("injected sleep() error = %v", err)
+	}
+	if scheduler.yieldCalls != 1 {
+		t.Fatalf("yield calls = %d, want 1", scheduler.yieldCalls)
+	}
+	if scheduler.sleepCalls != 1 || scheduler.duration != 12 {
+		t.Fatalf("sleep calls = %d at %dms, want 1 at 12ms", scheduler.sleepCalls, scheduler.duration)
+	}
+	if _, err := builtinSleep(ctx, []object.Object{intVal(-1)}, source.Pos{}); err == nil || !strings.Contains(err.Error(), "cannot be negative") {
+		t.Fatalf("injected negative sleep error = %v", err)
+	}
+}
+
+func TestSchedulerPolicies(t *testing.T) {
+	for _, name := range []string{"fair", "direct"} {
+		policy, err := ParseSchedulerPolicy(name)
+		if err != nil {
+			t.Fatalf("parse %q: %v", name, err)
+		}
+		if string(policy) != name {
+			t.Fatalf("parse %q = %q", name, policy)
+		}
+		if _, err := NewScheduler(policy); err != nil {
+			t.Fatalf("new %q: %v", name, err)
+		}
+	}
+	if _, err := ParseSchedulerPolicy("random"); err == nil || !strings.Contains(err.Error(), "choose fair or direct") {
+		t.Fatalf("invalid policy error = %v", err)
+	}
+	if _, err := NewScheduler("random"); err == nil {
+		t.Fatal("invalid policy was accepted")
+	}
+}
+
 func mustErr(t *testing.T, fn func() (object.Object, error)) error {
 	t.Helper()
 	v, err := fn()

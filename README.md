@@ -9,7 +9,8 @@ Version 0.5 added result types and pattern matching.
 Version 0.6 added channels and tasks.
 Version 0.7 added cooperative task cancellation.
 Version 0.8 added channel selection.
-Version 0.9 adds scheduler controls.
+Version 0.9 added scheduler controls.
+Version 0.10 adds configurable scheduler policies.
 The interpreter and the VM share one runtime and one standard library.
 Sprout produces friendly diagnostics that point at the exact problem.
 
@@ -109,6 +110,7 @@ Inside a project, omit the file for `run`, `vm`, `dis`, and `check`.
 Those commands then use the entry named in `sprout.toml`.
 Run `sprout help` to see the full usage.
 Add `-color always` to force colored diagnostics.
+Use `-scheduler fair` or `-scheduler direct` with `run` and `vm`.
 
 ## Diagnostics
 
@@ -250,7 +252,7 @@ See `docs/results.md` for the full reference.
 Version 0.6 added channels and tasks.
 Version 0.7 added cooperative cancellation.
 Version 0.8 added channel selection.
-Version 0.9 adds scheduler controls.
+Version 0.9 added scheduler controls.
 A channel moves values between spawned functions.
 A task reports one spawned function.
 
@@ -339,6 +341,17 @@ finished
 done
 ```
 
+Choose a task handoff policy from the command line.
+
+```text
+sprout run -scheduler direct examples/scheduler.spr
+```
+
+`fair` is the default policy.
+It calls the Go scheduler at `yield()`.
+`direct` skips that explicit handoff.
+Both policies keep cancellation checks.
+
 See `docs/concurrency.md` for the full reference.
 
 ## Modules
@@ -424,6 +437,7 @@ Version 0.6 runs channels and tasks on both engines.
 Version 0.7 runs cooperative cancellation on both engines.
 Version 0.8 runs channel selection on both engines.
 Version 0.9 runs scheduler controls on both engines.
+Version 0.10 runs both scheduler policies through the same runtime interface.
 
 The `dis` command shows the compiled instructions.
 
@@ -456,7 +470,8 @@ Version 0.5 adds `ok`, `err`, `is_ok`, `is_err`, `unwrap`, and `unwrap_or`.
 Version 0.6 adds `channel`, `send`, `recv`, `close`, `spawn`, and `await`.
 Version 0.7 added `cancel` and `is_cancelled`.
 Version 0.8 adds `select`.
-Version 0.9 adds `yield` and `sleep`.
+Version 0.9 added `yield` and `sleep`.
+Version 0.10 adds `fair` and `direct` scheduler policies.
 
 ```sprout
 let nums = [1, 2, 3, 4]
@@ -506,7 +521,7 @@ internal/checker static analysis
 internal/module  the module loader and the manifest
 internal/build   the bundler
 internal/object  runtime values, tasks, cancellation, selection, and modules
-internal/runtime value semantics, standard library, and scheduler controls
+internal/runtime value semantics, standard library, and scheduler policies
 internal/interp  the tree-walking interpreter
 internal/code    opcodes and the instruction stream
 internal/compiler  bytecode compiler
@@ -522,6 +537,8 @@ The runtime is the single source of truth for both engines.
 A struct type, its methods, and its field access live in one place.
 Channels and tasks live in the object and runtime packages.
 Adding a feature means updating the runtime, then both engines stay in step.
+The CLI creates one scheduler for the selected engine.
+Child tasks inherit that scheduler.
 
 ## Development
 
@@ -573,9 +590,10 @@ CI checks formatting, module files, vet, builds, tests, and race safety.
 The parity tests run each program on both engines.
 The VM tests match the same goldens as the interpreter.
 Module tests run projects and bundles on both engines.
-Concurrency tests cover blocking, close, cancellation, selection, scheduler controls, task completion, and engine parity.
+Concurrency tests cover blocking, close, cancellation, selection, scheduler policies, task completion, and engine parity.
 Match programs run on both engines and must agree.
 Tests use only the standard library. They need no network or secrets.
+Scheduler tests inject one policy into both engines and child tasks.
 
 ## Roadmap
 
@@ -608,12 +626,17 @@ Version 0.8 is complete. It added channel selection.
 Selection waits on several channels and reports the selected index.
 Both engines run the same selection examples.
 
-Version 0.9 is complete. It adds scheduler controls.
+Version 0.9 is complete. It added scheduler controls.
 `yield()` gives another task a scheduling opportunity.
 `sleep(milliseconds)` pauses one task and observes cancellation.
 Both engines run the same scheduler examples.
 
-Version 1.0 remains open for configurable scheduler policies and stronger task isolation.
+Version 0.10 is complete. It added configurable scheduler policies.
+The `fair` policy hands off at `yield()`.
+The `direct` policy skips that explicit handoff.
+The interpreter and VM share the policy interface.
+
+Version 1.0 remains open for stronger task isolation and additional policies.
 
 ## Limitations
 
@@ -631,8 +654,8 @@ Version 1.0 remains open for configurable scheduler policies and stronger task i
 - A bundle reprints module bodies. It does not compress them.
 - A match arm is a block. It cannot be a bare expression.
 - Cancellation is cooperative and has no timeout operation.
-- The scheduler policy cannot be configured.
 - `yield()` does not guarantee that another task runs immediately.
+- The `direct` policy does not force a task handoff.
 - `sleep()` uses wall-clock time, so wake order is not a timing contract.
 - A spawned function shares captured mutable values with its parent.
 - Do not mutate captured lists, maps, or structs from multiple tasks.

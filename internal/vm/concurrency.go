@@ -18,6 +18,7 @@ func (vm *VM) spawn(fn object.Object, args []object.Object, pos source.Pos) (*ob
 	go func() {
 		child := NewWithIO(vm.ctx.Stdin, vm.ctx.Stdout, vm.ctx.Stderr)
 		child.ctx.Done = task.Done()
+		child.ctx.Scheduler = vm.ctx.Scheduler
 		var value object.Object
 		var err error
 		defer func() {

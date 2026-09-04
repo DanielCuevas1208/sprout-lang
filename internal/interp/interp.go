@@ -47,9 +47,10 @@ func New() *Interpreter {
 func NewWithIO(stdin io.Reader, stdout, stderr io.Writer) *Interpreter {
 	iv := &Interpreter{globals: NewEnv(nil)}
 	iv.ctx = runtime.Context{
-		Stdin:  stdin,
-		Stdout: stdout,
-		Stderr: stderr,
+		Stdin:     stdin,
+		Stdout:    stdout,
+		Stderr:    stderr,
+		Scheduler: runtime.DefaultScheduler(),
 		Call: func(fn object.Object, args []object.Object, pos source.Pos) object.Object {
 			return iv.call(fn, args, pos)
 		},
@@ -57,6 +58,15 @@ func NewWithIO(stdin io.Reader, stdout, stderr io.Writer) *Interpreter {
 	}
 	RegisterBuiltins(iv)
 	return iv
+}
+
+// SetScheduler configures scheduling for this interpreter and its child
+// tasks. A nil scheduler restores the default fair policy.
+func (iv *Interpreter) SetScheduler(s runtime.Scheduler) {
+	if s == nil {
+		s = runtime.DefaultScheduler()
+	}
+	iv.ctx.Scheduler = s
 }
 
 // Globals returns the top-level environment.
