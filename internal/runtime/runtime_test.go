@@ -430,3 +430,31 @@ func TestSchedulerControls(t *testing.T) {
 		t.Fatalf("cancelled sleep() error = %v, want cancellation", err)
 	}
 }
+
+func TestAwaitTimeout(t *testing.T) {
+	task := object.NewTask()
+	got, err := builtinAwait(&Context{}, []object.Object{task, intVal(0)}, source.Pos{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, ok := got.(object.Result)
+	if !ok || result.Ok || result.Message != object.ErrTaskTimeout.Error() {
+		t.Fatalf("await timeout = %v, want timeout result", got)
+	}
+
+	if _, err := builtinAwait(&Context{}, []object.Object{task, object.Str{Value: "1"}}, source.Pos{}); err == nil || !strings.Contains(err.Error(), "must be an integer") {
+		t.Fatalf("await() type error = %v", err)
+	}
+	if _, err := builtinAwait(&Context{}, []object.Object{task, intVal(-1)}, source.Pos{}); err == nil || !strings.Contains(err.Error(), "cannot be negative") {
+		t.Fatalf("await() negative error = %v", err)
+	}
+	if _, err := builtinAwait(&Context{}, []object.Object{task, intVal(maxSleepMilliseconds + 1)}, source.Pos{}); err == nil || !strings.Contains(err.Error(), "too large") {
+		t.Fatalf("await() large error = %v", err)
+	}
+
+	task.Complete(intVal(42), nil)
+	got, err = builtinAwait(&Context{}, []object.Object{task, intVal(0)}, source.Pos{})
+	if err != nil || got.String() != "ok(42)" {
+		t.Fatalf("ready await = (%v, %v), want ok(42)", got, err)
+	}
+}

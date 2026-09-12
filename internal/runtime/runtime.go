@@ -140,7 +140,7 @@ var Builtins = []*Builtin{
 	{Name: "recv", MinArgs: 1, MaxArgs: 1, Fn: builtinRecv},
 	{Name: "close", MinArgs: 1, MaxArgs: 1, Fn: builtinClose},
 	{Name: "spawn", MinArgs: 1, MaxArgs: 1, Fn: builtinSpawn},
-	{Name: "await", MinArgs: 1, MaxArgs: 1, Fn: builtinAwait},
+	{Name: "await", MinArgs: 1, MaxArgs: 2, Fn: builtinAwait},
 	{Name: "cancel", MinArgs: 1, MaxArgs: 1, Fn: builtinCancel},
 	{Name: "is_cancelled", MinArgs: 0, MaxArgs: 0, Fn: builtinIsCancelled},
 	{Name: "yield", MinArgs: 0, MaxArgs: 0, Fn: builtinYield},

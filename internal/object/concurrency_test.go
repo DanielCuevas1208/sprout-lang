@@ -124,6 +124,38 @@ func TestTaskCompletesOnce(t *testing.T) {
 	}
 }
 
+func TestTaskAwaitTimeout(t *testing.T) {
+	task := NewTask()
+	value, err := task.AwaitContextWithTimeout(nil, 0)
+	if value != NilValue || err != ErrTaskTimeout {
+		t.Fatalf("unready task = (%v, %v), want timeout", value, err)
+	}
+	if task.Cancelled() {
+		t.Fatal("timed out wait cancelled the task")
+	}
+
+	value, err = task.AwaitContextWithTimeout(nil, time.Nanosecond)
+	if value != NilValue || err != ErrTaskTimeout {
+		t.Fatalf("expired task = (%v, %v), want timeout", value, err)
+	}
+
+	task.Complete(Int{Value: 42}, nil)
+	value, err = task.AwaitContextWithTimeout(nil, 0)
+	if value != (Int{Value: 42}) || err != nil {
+		t.Fatalf("ready task = (%v, %v), want 42", value, err)
+	}
+}
+
+func TestTaskAwaitTimeoutHonorsCancellation(t *testing.T) {
+	task := NewTask()
+	done := make(chan struct{})
+	close(done)
+	value, err := task.AwaitContextWithTimeout(done, time.Second)
+	if value != NilValue || err != ErrCancelled {
+		t.Fatalf("cancelled wait = (%v, %v), want cancellation", value, err)
+	}
+}
+
 func TestSelectReceiveChoosesReadyChannel(t *testing.T) {
 	slow := NewChannel(0)
 	ready := NewChannel(1)

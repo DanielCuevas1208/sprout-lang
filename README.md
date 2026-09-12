@@ -10,7 +10,8 @@ Version 0.6 added channels and tasks.
 Version 0.7 added cooperative task cancellation.
 Version 0.8 added channel selection.
 Version 0.9 added scheduler controls.
-Version 0.10 adds configurable scheduler policies.
+Version 0.10 added configurable scheduler policies.
+Version 0.11 adds bounded task waits.
 The interpreter and the VM share one runtime and one standard library.
 Sprout produces friendly diagnostics that point at the exact problem.
 
@@ -27,6 +28,7 @@ The codebase is structured to grow cleanly over time.
 - Cooperative task cancellation that wakes blocked operations.
 - Channel selection for deterministic fan-in programs.
 - Scheduler controls for fair task handoff and cancellable pauses.
+- Optional timeouts for task waits that prevent indefinite blocking.
 - A `match` expression with wildcard and variable patterns.
 - A bytecode compiler and a stack-based virtual machine.
 - A tree-walking interpreter that shares the runtime with the VM.
@@ -253,6 +255,8 @@ Version 0.6 added channels and tasks.
 Version 0.7 added cooperative cancellation.
 Version 0.8 added channel selection.
 Version 0.9 added scheduler controls.
+Version 0.10 added configurable scheduler policies.
+Version 0.11 added bounded task waits.
 A channel moves values between spawned functions.
 A task reports one spawned function.
 
@@ -353,6 +357,33 @@ It calls the Go scheduler at `yield()`.
 Both policies keep cancellation checks.
 
 See `docs/concurrency.md` for the full reference.
+
+Bound a task wait with a second argument.
+The value is a timeout in milliseconds.
+A zero timeout checks the task without waiting.
+A timed-out task keeps running until the caller cancels it.
+
+```sprout
+let gate = channel()
+let worker = spawn(fn() {
+    recv(gate)
+    return "ready"
+})
+
+print(unwrap_or(await(worker, 1), "timed out"))
+cancel(worker)
+print(unwrap_or(await(worker), "cancelled"))
+close(gate)
+```
+
+The example prints this output.
+
+```text
+timed out
+cancelled
+```
+
+See `examples/timeout.spr` for the complete program.
 
 ## Modules
 
@@ -471,7 +502,8 @@ Version 0.6 adds `channel`, `send`, `recv`, `close`, `spawn`, and `await`.
 Version 0.7 added `cancel` and `is_cancelled`.
 Version 0.8 adds `select`.
 Version 0.9 added `yield` and `sleep`.
-Version 0.10 adds `fair` and `direct` scheduler policies.
+Version 0.10 added `fair` and `direct` scheduler policies.
+Version 0.11 adds the optional timeout argument to `await`.
 
 ```sprout
 let nums = [1, 2, 3, 4]
@@ -500,6 +532,7 @@ The `examples` directory holds documented programs.
 - `cancellation.spr` stops a blocked task cooperatively.
 - `select.spr` fans in values from several channels.
 - `scheduler.spr` gives tasks explicit scheduling opportunities.
+- `timeout.spr` bounds a task wait before cancellation.
 - `guess.spr` is an interactive game.
 - `project` is a multi-file module project.
 
@@ -578,21 +611,21 @@ CI checks formatting, module files, vet, builds, tests, and race safety.
 | `internal/ast` | Source printer round trips. |
 | `internal/module` | Loading, resolution, cycles, and manifests. |
 | `internal/build` | Bundle output and reserved names. |
-| `internal/runtime` | Arithmetic, comparison, indexing, members, results, concurrency, and scheduling. |
+| `internal/runtime` | Arithmetic, comparison, indexing, members, results, concurrency, and task waits. |
 | `internal/interp` | Evaluation, closures, structs, and runtime errors. |
 | `internal/code` | Opcodes, the builder, and disassembly. |
 | `internal/compiler` | Bytecode for expressions, structs, and control flow. |
 | `internal/vm` | Execution, closures, structs, and runtime errors. |
 | `internal/diag` | Diagnostic rendering. |
 | `internal/object` | Channels, tasks, cancellation, selection, and shared runtime values. |
-| `test` | Example goldens, engine parity, cancellation, and command line. |
+| `test` | Example goldens, engine parity, cancellation, timeouts, and command line. |
 
 The parity tests run each program on both engines.
 The VM tests match the same goldens as the interpreter.
 Module tests run projects and bundles on both engines.
-Concurrency tests cover blocking, close, cancellation, selection, scheduler policies, task completion, and engine parity.
+Concurrency tests cover blocking, close, cancellation, selection, scheduler policies, task completion, timeouts, and engine parity.
 Match programs run on both engines and must agree.
-Tests use only the standard library. They need no network or secrets.
+Tests use deterministic fixtures. They do not use secrets.
 Scheduler tests inject one policy into both engines and child tasks.
 
 ## Roadmap
@@ -636,7 +669,12 @@ The `fair` policy hands off at `yield()`.
 The `direct` policy skips that explicit handoff.
 The interpreter and VM share the policy interface.
 
-Version 1.0 remains open for stronger task isolation and additional policies.
+Version 0.11 is complete. It added bounded task waits.
+`await(task, milliseconds)` returns `err("task timed out")` when the wait expires.
+The timeout does not cancel the task.
+Both engines use the same task wait implementation.
+
+Version 1.0 remains open for stronger task isolation and additional scheduler policies.
 
 ## Limitations
 
@@ -653,7 +691,8 @@ Version 1.0 remains open for stronger task isolation and additional policies.
 - Module resolution is file based. There is no package registry.
 - A bundle reprints module bodies. It does not compress them.
 - A match arm is a block. It cannot be a bare expression.
-- Cancellation is cooperative and has no timeout operation.
+- Cancellation is cooperative and has no automatic timeout.
+- Positive await timeouts use wall-clock time.
 - `yield()` does not guarantee that another task runs immediately.
 - The `direct` policy does not force a task handoff.
 - `sleep()` uses wall-clock time, so wake order is not a timing contract.

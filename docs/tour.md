@@ -379,6 +379,7 @@ Sprout 0.7 runs cooperative cancellation on both engines.
 Sprout 0.8 runs channel selection on both engines.
 Sprout 0.9 runs scheduler controls on both engines.
 Sprout 0.10 runs configurable scheduler policies on both engines.
+Sprout 0.11 runs configurable scheduler policies and bounded task waits on both engines.
 It shares the parser, the checker, and the standard library with the
 interpreter. The two engines produce the same results.
 
@@ -428,6 +429,11 @@ sprout run -scheduler direct examples/scheduler.spr
 The default `fair` policy calls the Go scheduler at `yield()`.
 The `direct` policy skips that explicit handoff.
 
+Bound a task wait with `await(task, milliseconds)`.
+Use zero to check readiness without waiting.
+An expired wait returns `err("task timed out")`.
+It does not cancel the task.
+
 ## Next steps
 
 Read the standard library reference in `docs/stdlib.md`.
@@ -436,5 +442,5 @@ Read the results and pattern matching reference in `docs/results.md`.
 Read the formal grammar in `docs/grammar.md`.
 Read the bytecode virtual machine in `docs/bytecode.md`.
 Read the module system in `docs/modules.md`.
-Read concurrency and cancellation in `docs/concurrency.md`.
+Read concurrency, cancellation, and timed waits in `docs/concurrency.md`.
 Run the example programs in the `examples` directory.

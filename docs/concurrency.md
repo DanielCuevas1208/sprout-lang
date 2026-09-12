@@ -1,6 +1,6 @@
 # Concurrency
 
-Sprout 0.10 provides channels, tasks, cancellation, selection, and scheduler policies.
+Sprout 0.11 provides channels, tasks, cancellation, selection, scheduler policies, and bounded waits.
 
 ## Channels
 
@@ -22,6 +22,30 @@ Wait for completion with `await(task)`.
 
 `await` returns `ok(value)` after normal completion.
 It returns `err(message)` after a task error.
+
+## Timed waits
+
+Pass milliseconds as the second argument to `await`.
+`await(task, 0)` checks task state without waiting.
+A positive timeout waits for completion up to that duration.
+An expired wait returns `err("task timed out")`.
+The timeout does not cancel the task.
+Call `cancel(task)` when the task no longer matters.
+
+```sprout
+let gate = channel()
+let worker = spawn(fn() {
+    recv(gate)
+    return "ready"
+})
+
+print(unwrap_or(await(worker, 1), "timed out"))
+cancel(worker)
+print(unwrap_or(await(worker), "cancelled"))
+close(gate)
+```
+
+The program prints `timed out` and `cancelled`.
 
 ## Cancellation
 
@@ -136,9 +160,10 @@ Await every task that the program needs.
 
 ## Limitations
 
-Cancellation has no timeout operation.
+Cancellation has no automatic timeout.
 `yield()` does not guarantee that another task runs immediately.
 The `direct` policy does not force a task handoff.
 `sleep()` uses wall-clock time, so wake order is not a timing contract.
-A task that ignores cancellation can block `await` forever.
+A positive await timeout also uses wall-clock time.
+An unbounded `await` can block when a task ignores cancellation.
 Do not mutate captured lists, maps, or structs from multiple tasks.

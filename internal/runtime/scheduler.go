@@ -125,6 +125,17 @@ func validateSleepMilliseconds(milliseconds int64) error {
 	return nil
 }
 
+// validateTimeoutMilliseconds keeps await timer conversion safe.
+func validateTimeoutMilliseconds(milliseconds int64) error {
+	if milliseconds < 0 {
+		return FmtErr("await() timeout cannot be negative")
+	}
+	if milliseconds > maxSleepMilliseconds {
+		return FmtErr("await() timeout is too large")
+	}
+	return nil
+}
+
 // schedulerYield gives another runnable goroutine a scheduling opportunity.
 func schedulerYield(ctx *Context) error {
 	if ctx != nil && ctx.Cancelled() {

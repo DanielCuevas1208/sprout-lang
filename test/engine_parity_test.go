@@ -389,3 +389,26 @@ close(events)`
 		t.Fatalf("scheduler output = %q, want %q", ivOut, want)
 	}
 }
+
+func TestEnginesAgreeOnTimedAwait(t *testing.T) {
+	src := `let gate = channel()
+let task = spawn(fn() {
+    recv(gate)
+    return "ready"
+})
+print(unwrap_or(await(task, 1), "timed out"))
+cancel(task)
+print(unwrap_or(await(task), "cancelled"))
+close(gate)`
+	ivOut, ivErr := runInterpSrc(src)
+	vmOut, vmErr := runVMSrc(src)
+	if ivErr != nil || vmErr != nil {
+		t.Fatalf("timed await errors: interpreter=%v vm=%v", ivErr, vmErr)
+	}
+	if ivOut != vmOut {
+		t.Fatalf("timed await engines differ: interp=%q vm=%q", ivOut, vmOut)
+	}
+	if want := "timed out\ncancelled\n"; ivOut != want {
+		t.Fatalf("timed await output = %q, want %q", ivOut, want)
+	}
+}

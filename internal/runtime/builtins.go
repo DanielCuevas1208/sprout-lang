@@ -15,6 +15,7 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/sprout-lang/sprout/internal/object"
@@ -681,14 +682,31 @@ func builtinSpawn(ctx *Context, args []object.Object, pos source.Pos) (object.Ob
 	return ctx.Spawn(args[0], nil, pos)
 }
 
-// builtinAwait waits for a task and wraps its result in Result. Child
-// failures remain values that the caller can match.
+// builtinAwait waits for a task and wraps its result in Result. An optional
+// timeout bounds the wait in milliseconds without cancelling the task.
 func builtinAwait(ctx *Context, args []object.Object, pos source.Pos) (object.Object, error) {
 	task, ok := args[0].(*object.Task)
 	if !ok {
 		return nil, FmtErr("await() expects a task, got %s", args[0].Type())
 	}
-	value, err := task.AwaitContext(ctx.Done)
+	var done <-chan struct{}
+	if ctx != nil {
+		done = ctx.Done
+	}
+	var value object.Object
+	var err error
+	if len(args) == 1 {
+		value, err = task.AwaitContext(done)
+	} else {
+		milliseconds, ok := AsIntIndex(args[1])
+		if !ok {
+			return nil, FmtErr("await() timeout must be an integer, got %s", args[1].Type())
+		}
+		if err := validateTimeoutMilliseconds(milliseconds); err != nil {
+			return nil, err
+		}
+		value, err = task.AwaitContextWithTimeout(done, time.Duration(milliseconds)*time.Millisecond)
+	}
 	if err != nil {
 		return object.Result{Ok: false, Message: err.Error()}, nil
 	}

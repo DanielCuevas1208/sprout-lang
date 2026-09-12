@@ -1,6 +1,6 @@
 # Standard Library
 
-This page lists the built-in functions of Sprout 0.10.
+This page lists the built-in functions of Sprout 0.11.
 They are available in every program without an import.
 
 ## Output
@@ -120,7 +120,7 @@ Programs can use it to build module values dynamically.
 | `select(channels)` | Waits for a value from several channels. |
 | `close(channel)` | Closes a channel. |
 | `spawn(fn)` | Starts a zero-argument function as a task. |
-| `await(task)` | Waits for a task and returns a result. |
+| `await(task, timeout?)` | Waits for a task and returns a result. |
 | `cancel(task)` | Requests cooperative cancellation. |
 | `is_cancelled()` | Reports current task cancellation. |
 | `yield()` | Gives another task a scheduling opportunity. |
@@ -129,6 +129,10 @@ Programs can use it to build module values dynamically.
 `recv` returns `ok(value)` for a value.
 It returns `err("channel closed")` after close.
 `await` returns the worker value or an error result.
+Pass timeout milliseconds as the second `await` argument.
+Zero checks task state without waiting.
+An expired wait returns `err("task timed out")`.
+The timeout does not cancel the task.
 `cancel` wakes blocked operations when cancellation reaches a task.
 `select` returns `ok({"index": i, "value": v})` for a value.
 It returns `err("all channels closed")` when no channel remains.

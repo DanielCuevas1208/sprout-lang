@@ -5,10 +5,14 @@ import (
 	"fmt"
 	"reflect"
 	"sync"
+	"time"
 )
 
 // ErrCancelled reports a cooperative cancellation request.
 var ErrCancelled = errors.New("task cancelled")
+
+// ErrTaskTimeout reports that a bounded task wait ended before completion.
+var ErrTaskTimeout = errors.New("task timed out")
 
 // Channel is a synchronization point for Sprout values.
 //
@@ -242,6 +246,49 @@ func (t *Task) AwaitContext(done <-chan struct{}) (Object, error) {
 		return NilValue, ErrCancelled
 	}
 	return t.result.value, t.result.err
+}
+
+// AwaitContextWithTimeout waits for completion, cancellation, or timeout.
+// A non-positive timeout performs an immediate readiness check. The timeout
+// does not cancel the task.
+func (t *Task) AwaitContextWithTimeout(done <-chan struct{}, timeout time.Duration) (Object, error) {
+	select {
+	case <-t.done:
+		return t.result.value, t.result.err
+	default:
+	}
+	select {
+	case <-done:
+		return NilValue, ErrCancelled
+	default:
+	}
+	if timeout <= 0 {
+		return NilValue, ErrTaskTimeout
+	}
+
+	timer := time.NewTimer(timeout)
+	defer func() {
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+	}()
+	select {
+	case <-t.done:
+		return t.result.value, t.result.err
+	case <-done:
+		return NilValue, ErrCancelled
+	case <-timer.C:
+		// Prefer a completion that raced the timer.
+		select {
+		case <-t.done:
+			return t.result.value, t.result.err
+		default:
+			return NilValue, ErrTaskTimeout
+		}
+	}
 }
 
 // Cancel requests cooperative cancellation.
