@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 
 	"github.com/sprout-lang/sprout/internal/ast"
 	"github.com/sprout-lang/sprout/internal/diag"
@@ -57,7 +56,6 @@ func NewWithIO(stdin io.Reader, stdout, stderr io.Writer) *Interpreter {
 		},
 		Spawn: iv.spawn,
 	}
-	iv.loader = module.New(iv)
 	RegisterBuiltins(iv)
 	return iv
 }
@@ -217,17 +215,6 @@ func (iv *Interpreter) evalStmt(s ast.Stmt, env *Env) object.Object {
 		}
 		env.Define(n.Name.Name, m, true)
 		return object.NilValue
-
-	case *ast.ImportStmt:
-		mod, err := iv.loadModule(n)
-		if err != nil {
-			iv.raise(err.Error(), n.ImportPos)
-		}
-		env.Define(n.Alias, mod, true)
-		return object.NilValue
-
-	case *ast.ExportStmt:
-		return iv.evalStmt(n.Decl, env)
 
 	case *ast.FnStmt:
 		if n.Receiver != nil {

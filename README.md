@@ -490,41 +490,6 @@ Each line shows the offset, the opcode, and the source position.
 The engine parity tests prove the VM matches the interpreter.
 See `docs/bytecode.md` for the full reference.
 
-## Modules
-
-Version 0.3 adds a module system.
-Split a program across files with `import` and `export`.
-A module runs once, in its own scope.
-Only exported names are visible to importers.
-
-Save a library module.
-
-```sprout
-// lib/mathx.spr
-export fn double(x) {
-    return x * 2
-}
-```
-
-Use it from a program.
-
-```sprout
-import "lib/mathx"
-
-print(mathx["double"](21))    // 42
-```
-
-The bound name comes from the file name.
-Use `as` to choose a different name.
-Paths resolve against the importing file directory.
-Circular imports are an error.
-The loader caches each module, so it runs once per program.
-
-The `check` command validates the whole import graph.
-The VM compiles imports into `IMPORT` instructions.
-Run `examples/modules.spr` to see a working library.
-See `docs/modules.md` for the full reference.
-
 ## Standard library
 
 The standard library is small and documented.

@@ -550,7 +550,7 @@ func IndexGet(container, idx object.Object) (object.Object, error) {
 		if v, exists := c.Exports[ks.Value]; exists {
 			return v, nil
 		}
-		return nil, FmtErr("module '%s' has no exported member '%s'", c.Name, ks.Value)
+		return object.NilValue, nil
 	}
 	return nil, FmtErr("cannot index a %s", container.Type())
 }

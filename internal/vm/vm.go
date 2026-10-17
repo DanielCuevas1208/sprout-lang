@@ -14,15 +14,11 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 
-	"github.com/sprout-lang/sprout/internal/ast"
 	"github.com/sprout-lang/sprout/internal/code"
-	"github.com/sprout-lang/sprout/internal/compiler"
 	"github.com/sprout-lang/sprout/internal/diag"
-	"github.com/sprout-lang/sprout/internal/module"
 	"github.com/sprout-lang/sprout/internal/object"
 	"github.com/sprout-lang/sprout/internal/runtime"
 	"github.com/sprout-lang/sprout/internal/source"
@@ -130,7 +126,6 @@ func NewWithIO(stdin io.Reader, stdout, stderr io.Writer) *VM {
 		},
 		Spawn: vm.spawn,
 	}
-	vm.loader = module.New(vm)
 	return vm
 }
 
@@ -314,32 +309,6 @@ func (vm *VM) callValue(callee object.Object, args []object.Object, pos source.P
 	return nil
 }
 
-// loadModule loads the module at path as a value.
-//
-// fileName is the compiled file that contains the import instruction. Its
-// directory resolves relative import paths.
-func (vm *VM) loadModule(path, fileName string) (*object.Module, error) {
-	return vm.loader.Load(path, filepath.Dir(fileName))
-}
-
-// RunModule executes a module file on a fresh VM and returns its exports.
-//
-// The module runs on a fresh VM that shares the streams and the loader of
-// the importer. Sharing the loader keeps the module cache and the
-// circular-import guard across the whole import graph.
-func (vm *VM) RunModule(path string, file *source.File, prog *ast.Program) (map[string]object.Object, error) {
-	sub := NewWithIO(vm.ctx.Stdin, vm.ctx.Stdout, vm.ctx.Stderr)
-	sub.loader = vm.loader
-	compiled, err := compiler.Compile(file, prog)
-	if err != nil {
-		return nil, err
-	}
-	if _, rerr := sub.Run(file, compiled); rerr != nil {
-		return nil, rerr
-	}
-	return sub.exports, nil
-}
-
 // runFrames executes instructions until the frame stack reaches until.
 //
 // The entry call uses until 0, so execution ends when the entry frame
@@ -406,22 +375,6 @@ func (vm *VM) runFrames(until int) object.Object {
 			f := fn.Consts[idx].(*code.Function)
 			vm.push(&Closure{fn: f, env: fr.env})
 			fr.ip += 3
-		case code.OpImport:
-			pos := fr.pos()
-			path := fn.Consts[code.U16(fn.Code, fr.ip+1)].(object.Str).Value
-			fr.ip += 3
-			mod, err := vm.loadModule(path, fn.FileName)
-			if err != nil {
-				vm.failAtPos(err.Error(), pos)
-			}
-			vm.push(mod)
-		case code.OpExport:
-			name := fn.Consts[code.U16(fn.Code, fr.ip+1)].(object.Str).Value
-			fr.ip += 3
-			if vm.exports == nil {
-				vm.exports = make(map[string]object.Object)
-			}
-			vm.exports[name] = vm.pop()
 		case code.OpCall:
 			n := int(fn.Code[fr.ip+1])
 			pos := fr.pos()

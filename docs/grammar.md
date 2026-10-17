@@ -37,10 +37,6 @@ A `\x` escape writes one byte from two hex digits.
 Numbers do not start or end with an underscore.
 A floating-point literal needs a digit before the decimal point.
 
-The keywords are `let`, `const`, `fn`, `if`, `elif`, `else`, `while`,
-`for`, `in`, `return`, `break`, `continue`, `true`, `false`, `nil`,
-`and`, `or`, `not`, `import`, `export`, and `as`.
-
 ## Program structure
 
 ```
@@ -50,7 +46,6 @@ statement     := import_stmt | let_decl | const_decl | fn_decl
                | export_stmt
                | if_stmt | while_stmt | for_stmt
                | return_stmt | break_stmt | continue_stmt
-               | import_stmt | export_stmt
                | expr_stmt
 ```
 

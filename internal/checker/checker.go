@@ -143,8 +143,8 @@ type checker struct {
 var builtinNames = buildBuiltinSet()
 
 func buildBuiltinSet() map[string]bool {
-	set := make(map[string]bool, len(runtime.Names))
-	for _, n := range runtime.Names {
+	set := make(map[string]bool, len(interp.BuiltinNames))
+	for _, n := range interp.BuiltinNames {
 		set[n] = true
 	}
 	return set
@@ -161,16 +161,6 @@ func (c *checker) checkStmts(stmts []ast.Stmt, sc *scope) {
 	for _, s := range stmts {
 		c.checkStmt(s, sc)
 	}
-}
-
-// checkBody checks a statement list that is not the program root.
-//
-// Imports and exports are file-level, so this clears the atTop flag.
-func (c *checker) checkBody(stmts []ast.Stmt, sc *scope) {
-	prev := c.atTop
-	c.atTop = false
-	c.checkStmts(stmts, sc)
-	c.atTop = prev
 }
 
 func (c *checker) declare(sc *scope, name string, kind symKind, pos source.Pos, typeAnn string) {
@@ -200,7 +190,7 @@ func (c *checker) checkStmt(s ast.Stmt, sc *scope) {
 			c.checkParam(funcScope, p)
 		}
 		c.funcDepth++
-		c.checkBody(n.Body.Stmts, funcScope)
+		c.checkStmts(n.Body.Stmts, funcScope)
 		c.funcDepth--
 	case *ast.StructStmt:
 		c.checkStruct(n, sc)
@@ -208,18 +198,18 @@ func (c *checker) checkStmt(s ast.Stmt, sc *scope) {
 		c.checkInterface(n, sc)
 	case *ast.IfStmt:
 		c.checkExpr(n.Cond, sc)
-		c.checkBody(n.Then.Stmts, newScope(sc))
+		c.checkStmts(n.Then.Stmts, newScope(sc))
 		for _, b := range n.Elifs {
 			c.checkExpr(b.Cond, sc)
-			c.checkBody(b.Body.Stmts, newScope(sc))
+			c.checkStmts(b.Body.Stmts, newScope(sc))
 		}
 		if n.Else != nil {
-			c.checkBody(n.Else.Stmts, newScope(sc))
+			c.checkStmts(n.Else.Stmts, newScope(sc))
 		}
 	case *ast.WhileStmt:
 		c.checkExpr(n.Cond, sc)
 		c.loopDepth++
-		c.checkBody(n.Body.Stmts, newScope(sc))
+		c.checkStmts(n.Body.Stmts, newScope(sc))
 		c.loopDepth--
 	case *ast.ForInStmt:
 		c.checkExpr(n.Iterable, sc)
@@ -230,7 +220,7 @@ func (c *checker) checkStmt(s ast.Stmt, sc *scope) {
 			bodyScope.names[n.Var.Name] = symbol{kind: symVar, pos: n.Var.Position}
 		}
 		c.loopDepth++
-		c.checkBody(n.Body.Stmts, bodyScope)
+		c.checkStmts(n.Body.Stmts, bodyScope)
 		c.loopDepth--
 	case *ast.ReturnStmt:
 		if c.funcDepth == 0 {
@@ -298,23 +288,6 @@ func (c *checker) checkExportPos(pos source.Pos) {
 	}
 	if c.funcDepth > 0 || c.loopDepth > 0 {
 		c.errorf(pos, "export can only appear at the top level of a module")
-	}
-}
-
-func (c *checker) checkImport(n *ast.ImportStmt, sc *scope) {
-	if !c.atTop {
-		c.errorf(n.ImportPos, "'import' can only appear at the top level")
-	}
-	if n.Path == "" {
-		c.errorf(n.ImportPos, "module path cannot be empty")
-	}
-	if n.Alias == "" {
-		return
-	}
-	if _, dup := sc.names[n.Alias]; dup {
-		c.errorf(n.ImportPos, "duplicate declaration of '%s'", n.Alias)
-	} else {
-		sc.names[n.Alias] = symbol{kind: symModule, pos: n.ImportPos}
 	}
 }
 
@@ -600,7 +573,7 @@ func (c *checker) checkExpr(e ast.Expr, sc *scope) {
 			c.checkParam(fnScope, p)
 		}
 		c.funcDepth++
-		c.checkBody(n.Body.Stmts, fnScope)
+		c.checkStmts(n.Body.Stmts, fnScope)
 		c.funcDepth--
 	case *ast.MatchExpr:
 		c.checkMatch(n, sc)

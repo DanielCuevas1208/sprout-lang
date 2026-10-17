@@ -458,3 +458,14 @@ func TestAwaitTimeout(t *testing.T) {
 		t.Fatalf("ready await = (%v, %v), want ok(42)", got, err)
 	}
 }
+
+func TestModuleIndexMissingPreservesNil(t *testing.T) {
+	m := &object.Module{Name: "demo", Exports: map[string]object.Object{}}
+	v := mustValue(t, func() (object.Object, error) { return IndexGet(m, object.Str{Value: "private"}) })
+	if v.Type() != object.TypeNil {
+		t.Fatalf("missing indexed module member should be nil: %v", v)
+	}
+	if _, err := GetMember(m, "private"); err == nil {
+		t.Fatal("named access should reject unexported members")
+	}
+}

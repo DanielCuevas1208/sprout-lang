@@ -10,7 +10,6 @@ package code
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/sprout-lang/sprout/internal/object"
@@ -358,14 +357,6 @@ func (d *disassembler) instruction(ip int) (int, bool) {
 		} else {
 			fmt.Fprintf(&d.b, "  %d", idx)
 		}
-		return ip + 3, true
-	case OpImport, OpExport:
-		idx := U16(d.fn.Code, ip+1)
-		name := "<unknown>"
-		if c, ok := d.fn.Consts[idx].(object.Str); ok {
-			name = strconv.Quote(c.Value)
-		}
-		fmt.Fprintf(&d.b, "  %d  %s", idx, name)
 		return ip + 3, true
 	case OpCall:
 		fmt.Fprintf(&d.b, "  %d", d.fn.Code[ip+1])

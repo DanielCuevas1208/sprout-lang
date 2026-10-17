@@ -24,8 +24,6 @@ They are available in every program without an import.
 `type` reports `struct` for an instance, `struct type` for a struct
 declaration, and `method` for a bound method.
 `int` and `float` accept numbers, booleans, and numeric strings.
-`type` returns one of `int`, `float`, `string`, `bool`, `nil`, `list`,
-`map`, `function`, `range`, or `module`.
 
 ## Values
 
