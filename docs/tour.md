@@ -368,6 +368,39 @@ sprout> x * 7
 sprout> :quit
 ```
 
+## Modules
+
+Split a program across files with `import` and `export`.
+A module runs once, in its own scope.
+Only exported names are visible to importers.
+
+```sprout
+// lib/math.spr
+export fn square(x) {
+    return x * x
+}
+```
+
+```sprout
+// main.spr
+import "lib/math"
+
+print(math["square"](5))   // 25
+```
+
+The bound name comes from the file name.
+Use `as` to choose a different name.
+
+```sprout
+import "lib/math" as m
+print(m["square"](5))      // 25
+```
+
+Module values are read-only namespaces.
+Exported functions share the module scope.
+They can call private helpers and keep module state.
+See `docs/modules.md` for the full reference.
+
 ## Bytecode virtual machine
 
 Sprout 0.2 added a stack-based bytecode virtual machine.

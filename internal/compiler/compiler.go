@@ -143,6 +143,19 @@ func endPos(stmts []ast.Stmt) source.Pos {
 	return source.Pos{Line: 1, Column: 1}
 }
 
+// declaredName returns the name bound by an exported declaration.
+func declaredName(decl ast.Stmt) string {
+	switch d := decl.(type) {
+	case *ast.LetStmt:
+		if d.Name != nil {
+			return d.Name.Name
+		}
+	case *ast.FnStmt:
+		return d.Name.Name
+	}
+	return ""
+}
+
 func (c *Compiler) b() *code.Builder { return c.fns[len(c.fns)-1].b }
 
 func (c *Compiler) cur() *scope { return c.fns[len(c.fns)-1].cur }

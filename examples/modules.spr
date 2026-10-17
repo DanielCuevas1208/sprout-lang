@@ -1,0 +1,18 @@
+// modules.spr shows how to import other Sprout files.
+//
+// An import binds the module to a name. The name comes from the file name,
+// or from an "as" clause. Module values are read-only namespaces. Reach an
+// export with index access, then call it like any other function.
+
+import "lib/numbers"
+import "lib/strings" as text
+
+print(numbers["square"](5))
+print(numbers["cube"](3))
+print(numbers["answer"])
+
+print(text["shout"]("hi"))
+print(text["whisper"]("QUIET"))
+
+// Private names are not part of the module value.
+print(numbers["secret"])

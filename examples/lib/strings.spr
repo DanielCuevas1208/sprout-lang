@@ -1,0 +1,9 @@
+// strings.spr is a module with a few string helpers.
+
+export fn shout(text) {
+    return upper(text) + "!"
+}
+
+export fn whisper(text) {
+    return lower(text)
+}

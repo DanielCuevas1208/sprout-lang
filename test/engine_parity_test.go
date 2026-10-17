@@ -2,11 +2,14 @@ package test
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/sprout-lang/sprout/internal/checker"
 	"github.com/sprout-lang/sprout/internal/compiler"
+	"github.com/sprout-lang/sprout/internal/diag"
 	"github.com/sprout-lang/sprout/internal/interp"
 	"github.com/sprout-lang/sprout/internal/parser"
 	"github.com/sprout-lang/sprout/internal/source"

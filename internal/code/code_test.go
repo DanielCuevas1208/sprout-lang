@@ -16,6 +16,8 @@ func TestOpcodeNames(t *testing.T) {
 		OpReturnValue: "RETURN_VALUE",
 		OpJumpIfFalse: "JUMP_IF_FALSE",
 		OpGe:          "GE",
+		OpImport:      "IMPORT",
+		OpExport:      "EXPORT",
 	}
 	for op, want := range names {
 		if op.String() != want {
