@@ -1,0 +1,36 @@
+// A tiny text helper.
+//
+// Strings iterate one character at a time, so splitting on spaces is a
+// short loop. The helpers are private; only the split, count, and first
+// functions are visible to importers.
+
+fn split(text) {
+    let out = []
+    let current = ""
+    for ch in text {
+        if ch == " " {
+            if len(current) > 0 {
+                push(out, current)
+                current = ""
+            }
+        } else {
+            current = current + ch
+        }
+    }
+    if len(current) > 0 {
+        push(out, current)
+    }
+    return out
+}
+
+export fn count(text) {
+    return len(split(text))
+}
+
+export fn first(text) {
+    let parts = split(text)
+    if len(parts) == 0 {
+        return ""
+    }
+    return parts[0]
+}

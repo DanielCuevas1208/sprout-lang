@@ -1,0 +1,7 @@
+scores: [7, 3, 9, 5, 1]
+low: 1
+high: 9
+average: 5.0
+helper calls: 3
+words: 6
+first: sprout

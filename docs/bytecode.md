@@ -99,10 +99,16 @@ This matches the interpreter, so closures see their own copy.
 | SET_INDEX | none | Pop value, index, and container. |
 | BUILD_LIST | count | Build a list. |
 | BUILD_MAP | count | Build a map. |
+| IMPORT | module | Load a module and push its value. |
+| MAKE_MODULE | name | Build a module from a map and a name. |
 | MAKE_ITER | none | Pop an iterable, push an iterator. |
 | ITER_NEXT | target | Advance, jump when done. |
-| IMPORT | index | Load a module and push it. |
-| EXPORT | index | Record the top value as an export. |
+| MAKE_STRUCT | name, fields | Build a struct type from field names. |
+| ADD_METHOD | name | Register a method on a struct type. |
+| GET_MEMBER | name | Push a field, method, or module member. |
+| SET_MEMBER | name | Store a value in a struct field. |
+| BUILD_STRUCT | count | Build a struct from named values. |
+| TEST_RESULT | ok-flag, target | Unwrap a matching result, else jump. |
 | NEG | none | Negate the top. |
 | NOT | none | Invert the truthiness. |
 | ADD | none | Add the top two values. |
@@ -118,6 +124,47 @@ This matches the interpreter, so closures see their own copy.
 | GT | none | Test greater than. |
 | GE | none | Test greater or equal. |
 
+## Modules
+
+An import compiles to `IMPORT` with the module index.
+The operand names the module in the program's module table.
+The VM runs the module body once and caches the result.
+Later imports reuse the cached module value.
+A module that imports itself is an import cycle and fails.
+
+```text
+0000  IMPORT  ; main.spr:1:1  0  (math)
+0003  SET_LOCAL  ; main.spr:1:19  0
+```
+
+A member read compiles to `GET_MEMBER` with the member name.
+A struct field read and a module export read use the same instruction.
+The `dis` command lists every module below the main function.
+
+## Structs
+
+A struct declaration compiles to `MAKE_STRUCT`.
+The field names are pushed first, then the instruction builds the type.
+A method declaration compiles to `CLOSURE` and `ADD_METHOD`.
+The method reserves slot zero for the `self` receiver.
+
+A struct literal with positional values is a normal call.
+The VM constructs the instance when it calls the type value.
+A named struct literal compiles to `BUILD_STRUCT`.
+
+```text
+0000  PUSH_CONST  ; test.spr:2:8  0  (x)
+0003  PUSH_CONST  ; test.spr:2:8  1  (y)
+0006  MAKE_STRUCT  ; test.spr:2:1  2  (Point) fields 2
+0011  SET_LOCAL  ; test.spr:2:8  1
+0014  GET_LOCAL  ; test.spr:6:4  1
+0017  CLOSURE  ; test.spr:6:1  4  (Point.sum)
+0020  ADD_METHOD  ; test.spr:6:10  3  (sum)
+```
+
+A method call reads the method with `GET_MEMBER`.
+The VM binds the receiver when it calls the method value.
+
 ## Short-circuiting
 
 `and` and `or` evaluate lazily.
@@ -129,6 +176,40 @@ print(0 and 1)   // prints 0
 print(1 or 2)    // prints 1
 ```
 
+## Pattern matching
+
+A match expression compiles into a subject push and an arm chain.
+Each arm starts by duplicating the subject.
+Its pattern test either unwraps the value or jumps to the next arm.
+
+A result pattern compiles to `TEST_RESULT`.
+The instruction reads the ok-flag and the failure target.
+A matching result is unwrapped and stays on the stack.
+Any other value jumps to the target.
+
+A literal pattern duplicates the value and compares it.
+The comparison is `==`; an integer matches an equal float.
+
+```text
+0000  GET_LOCAL  ; test.spr:2:13  0
+0003  DUP  ; test.spr:3:5
+0004  TEST_RESULT  ; test.spr:3:5  ok -> 0032
+0008  NEW_ENV  ; test.spr:3:14  1
+0011  SET_LOCAL  ; test.spr:3:5  0
+0014  POP  ; test.spr:3:5
+0015  GET_LOCAL  ; test.spr:3:16  0
+0018  PUSH_CONST  ; test.spr:3:20  1  (2)
+0021  MUL  ; test.spr:3:18
+0022  END_ENV  ; test.spr:3:14
+0023  JUMP  ; test.spr:3:14  -> 0068
+0026  DUP  ; test.spr:4:5
+0027  TEST_RESULT  ; test.spr:4:5  err -> 0046
+```
+
+Each arm body runs in its own environment.
+Pattern variables bind in that environment.
+The arm body leaves its value on the stack.
+
 ## Shared runtime
 
 The VM does not implement arithmetic itself.
@@ -139,22 +220,6 @@ This guarantees identical results.
 The runtime covers arithmetic, comparison, indexing, and iteration.
 It also owns the standard library.
 A builtin is a runtime value with a name and a Go function.
-
-## Modules
-
-The compiler turns an `import` statement into an `IMPORT` instruction.
-The instruction carries the module path from the constant pool.
-The VM loads the module through the shared module loader and pushes it.
-
-The `export` keyword compiles the wrapped declaration, then reads the
-declared name and records it with an `EXPORT` instruction.
-A program that runs as a module fills an export table with these names.
-A program that runs directly ignores the table.
-
-The VM runs every imported module on a fresh VM.
-All modules share one loader, so caching and cycle detection span the
-whole import graph.
-See `docs/modules.md` for the language-level rules.
 
 ## Errors
 

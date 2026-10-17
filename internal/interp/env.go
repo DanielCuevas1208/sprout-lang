@@ -1,6 +1,8 @@
 package interp
 
 import (
+	"sync"
+
 	"github.com/sprout-lang/sprout/internal/object"
 )
 
@@ -12,10 +14,11 @@ type binding struct {
 
 // Env is a lexical scope that chains to its parent.
 //
-// Name lookup walks the chain from the innermost scope outward. This gives
-// Sprout closures the standard shared-environment semantics.
+// Name lookup walks the chain from the innermost scope outward. A lock keeps
+// captured environments safe when a child task runs beside its parent.
 type Env struct {
 	parent *Env
+	mu     sync.RWMutex
 	vars   map[string]*binding
 }
 
@@ -26,42 +29,54 @@ func NewEnv(parent *Env) *Env {
 
 // Define binds name to value in this environment.
 func (e *Env) Define(name string, value object.Object, isConst bool) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 	e.vars[name] = &binding{value: value, isConst: isConst}
 }
 
 // Get returns the value bound to name, searching enclosing scopes.
 func (e *Env) Get(name string) (object.Object, error) {
-	b := e.lookup(name)
-	if b == nil {
-		return nil, fmtErr("undefined name '%s'", name)
+	for env := e; env != nil; env = env.parent {
+		env.mu.RLock()
+		b, ok := env.vars[name]
+		if ok {
+			value := b.value
+			env.mu.RUnlock()
+			return value, nil
+		}
+		env.mu.RUnlock()
 	}
-	return b.value, nil
+	return nil, fmtErr("undefined name '%s'", name)
 }
 
 // Assign stores value into the nearest binding of name.
 func (e *Env) Assign(name string, value object.Object) error {
-	b := e.lookup(name)
-	if b == nil {
-		return fmtErr("cannot assign to undefined name '%s'", name)
+	for env := e; env != nil; env = env.parent {
+		env.mu.Lock()
+		b, ok := env.vars[name]
+		if ok {
+			if b.isConst {
+				env.mu.Unlock()
+				return fmtErr("cannot assign to constant '%s'", name)
+			}
+			b.value = value
+			env.mu.Unlock()
+			return nil
+		}
+		env.mu.Unlock()
 	}
-	if b.isConst {
-		return fmtErr("cannot assign to constant '%s'", name)
-	}
-	b.value = value
-	return nil
+	return fmtErr("cannot assign to undefined name '%s'", name)
 }
 
 // IsConst reports whether name is bound to a constant.
 func (e *Env) IsConst(name string) bool {
-	b := e.lookup(name)
-	return b != nil && b.isConst
-}
-
-func (e *Env) lookup(name string) *binding {
 	for env := e; env != nil; env = env.parent {
-		if b, ok := env.vars[name]; ok {
-			return b
+		env.mu.RLock()
+		b, ok := env.vars[name]
+		env.mu.RUnlock()
+		if ok {
+			return b.isConst
 		}
 	}
-	return nil
+	return false
 }

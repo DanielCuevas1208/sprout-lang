@@ -6,7 +6,6 @@ import (
 
 	"github.com/sprout-lang/sprout/internal/code"
 	"github.com/sprout-lang/sprout/internal/diag"
-	"github.com/sprout-lang/sprout/internal/object"
 	"github.com/sprout-lang/sprout/internal/parser"
 	"github.com/sprout-lang/sprout/internal/source"
 )
@@ -44,12 +43,13 @@ func nextOffset(b []byte, ip int) int {
 	switch code.Opcode(b[ip]) {
 	case code.OpGetUp, code.OpSetUp:
 		return ip + 5
+	case code.OpTestResult:
+		return ip + 4
 	case code.OpCall:
 		return ip + 2
 	case code.OpPushConst, code.OpNewEnv, code.OpGetLocal, code.OpSetLocal,
 		code.OpBuiltin, code.OpClosure, code.OpJump, code.OpJumpIfFalse,
-		code.OpJumpIfTrue, code.OpBuildList, code.OpBuildMap, code.OpIterNext,
-		code.OpImport, code.OpExport:
+		code.OpJumpIfTrue, code.OpBuildList, code.OpBuildMap, code.OpIterNext:
 		return ip + 3
 	default:
 		return ip + 1
@@ -227,6 +227,73 @@ func TestCompileShortCircuit(t *testing.T) {
 	}
 }
 
+func TestCompileMatch(t *testing.T) {
+	p, err := compileSrc(t, `
+let r = ok(1)
+print(match r {
+    ok(v) => { v },
+    err(e) => { 0 },
+    _ => { -1 },
+})
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	main := p.Main
+	// The ok and err arms each test a result variant; the wildcard tests
+	// nothing.
+	if got := opCount(t, main, code.OpTestResult); got != 2 {
+		t.Errorf("test result count: %d", got)
+	}
+	// One dup carries the subject into each arm.
+	if got := opCount(t, main, code.OpDup); got != 3 {
+		t.Errorf("dup count: %d", got)
+	}
+	// One arm scope plus the wildcard arm scope.
+	if got := opCount(t, main, code.OpNewEnv); got != 3 {
+		t.Errorf("new env count: %d", got)
+	}
+}
+
+func TestCompileMatchLiterals(t *testing.T) {
+	p, err := compileSrc(t, `
+print(match 3 {
+    1 => { "one" },
+    3 => { "three" },
+    _ => { "other" },
+})
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	main := p.Main
+	// Each literal arm compares with the subject once.
+	if got := opCount(t, main, code.OpEq); got != 2 {
+		t.Errorf("eq count: %d", got)
+	}
+	if got := opCount(t, main, code.OpJumpIfTrue); got != 2 {
+		t.Errorf("jump if true count: %d", got)
+	}
+}
+
+func TestCompileMatchNested(t *testing.T) {
+	p, err := compileSrc(t, `
+let r = ok(err("x"))
+print(match r {
+    ok(err(m)) => { m },
+    _ => { "?" },
+})
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The ok(err(m)) arm needs two result tests, one per level.
+	main := p.Main
+	if got := opCount(t, main, code.OpTestResult); got != 2 {
+		t.Errorf("test result count: %d", got)
+	}
+}
+
 func TestCompileAssignment(t *testing.T) {
 	p, err := compileSrc(t, "let x = 1\nx = 2\nprint(x)\n")
 	if err != nil {
@@ -332,32 +399,5 @@ func TestCompileASTPositionsTracked(t *testing.T) {
 			t.Errorf("missing position for instruction at offset %d", ip)
 		}
 		ip = nextOffset(main.Code, ip)
-	}
-}
-
-func TestCompileImportAndExport(t *testing.T) {
-	p, err := compileSrc(t, `
-import "lib/math" as m
-export let answer = 42
-export fn go() { return m["square"](2) }
-`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := opCount(t, p.Main, code.OpImport); got != 1 {
-		t.Errorf("IMPORT count: got %d, want 1", got)
-	}
-	if got := opCount(t, p.Main, code.OpExport); got != 2 {
-		t.Errorf("EXPORT count: got %d, want 2", got)
-	}
-	// The import path lands in the constant pool.
-	found := false
-	for _, c := range p.Main.Consts {
-		if s, ok := c.(object.Str); ok && s.Value == "lib/math" {
-			found = true
-		}
-	}
-	if !found {
-		t.Error("import path missing from the constant pool")
 	}
 }

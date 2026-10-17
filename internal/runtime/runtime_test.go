@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/sprout-lang/sprout/internal/object"
+	"github.com/sprout-lang/sprout/internal/source"
 )
 
 func mustValue(t *testing.T, fn func() (object.Object, error)) object.Object {
@@ -14,6 +15,65 @@ func mustValue(t *testing.T, fn func() (object.Object, error)) object.Object {
 		t.Fatalf("unexpected error: %v", err)
 	}
 	return v
+}
+
+type recordingScheduler struct {
+	yieldCalls int
+	sleepCalls int
+	duration   int64
+}
+
+func (s *recordingScheduler) Yield(ctx *Context) error {
+	s.yieldCalls++
+	return nil
+}
+
+func (s *recordingScheduler) Sleep(ctx *Context, milliseconds int64) error {
+	s.sleepCalls++
+	s.duration = milliseconds
+	return nil
+}
+
+func TestSchedulerCanBeInjected(t *testing.T) {
+	scheduler := &recordingScheduler{}
+	ctx := &Context{Scheduler: scheduler}
+
+	if _, err := builtinYield(ctx, nil, source.Pos{}); err != nil {
+		t.Fatalf("injected yield() error = %v", err)
+	}
+	if _, err := builtinSleep(ctx, []object.Object{intVal(12)}, source.Pos{}); err != nil {
+		t.Fatalf("injected sleep() error = %v", err)
+	}
+	if scheduler.yieldCalls != 1 {
+		t.Fatalf("yield calls = %d, want 1", scheduler.yieldCalls)
+	}
+	if scheduler.sleepCalls != 1 || scheduler.duration != 12 {
+		t.Fatalf("sleep calls = %d at %dms, want 1 at 12ms", scheduler.sleepCalls, scheduler.duration)
+	}
+	if _, err := builtinSleep(ctx, []object.Object{intVal(-1)}, source.Pos{}); err == nil || !strings.Contains(err.Error(), "cannot be negative") {
+		t.Fatalf("injected negative sleep error = %v", err)
+	}
+}
+
+func TestSchedulerPolicies(t *testing.T) {
+	for _, name := range []string{"fair", "direct"} {
+		policy, err := ParseSchedulerPolicy(name)
+		if err != nil {
+			t.Fatalf("parse %q: %v", name, err)
+		}
+		if string(policy) != name {
+			t.Fatalf("parse %q = %q", name, policy)
+		}
+		if _, err := NewScheduler(policy); err != nil {
+			t.Fatalf("new %q: %v", name, err)
+		}
+	}
+	if _, err := ParseSchedulerPolicy("random"); err == nil || !strings.Contains(err.Error(), "choose fair or direct") {
+		t.Fatalf("invalid policy error = %v", err)
+	}
+	if _, err := NewScheduler("random"); err == nil {
+		t.Fatal("invalid policy was accepted")
+	}
 }
 
 func mustErr(t *testing.T, fn func() (object.Object, error)) error {
@@ -186,6 +246,62 @@ func TestSetIndex(t *testing.T) {
 	}
 }
 
+func TestResults(t *testing.T) {
+	okVal := object.Result{Ok: true, Value: intVal(42)}
+	errVal := object.Result{Ok: false, Message: "boom"}
+
+	if okVal.String() != "ok(42)" {
+		t.Errorf("ok string: %q", okVal.String())
+	}
+	if errVal.String() != `err("boom")` {
+		t.Errorf("err string: %q", errVal.String())
+	}
+	if okVal.Type() != object.TypeResult {
+		t.Errorf("result type: %q", okVal.Type())
+	}
+	if !IsOk(okVal) || IsOk(errVal) || IsOk(intVal(1)) {
+		t.Error("IsOk misreports a result")
+	}
+	if got := mustValue(t, func() (object.Object, error) { return Unwrap(okVal) }); got.String() != "42" {
+		t.Errorf("unwrap ok: got %s", got)
+	}
+	if err := mustErr(t, func() (object.Object, error) { return Unwrap(errVal) }); err.Error() != "boom" {
+		t.Errorf("unwrap err message: %v", err)
+	}
+	if err := mustErr(t, func() (object.Object, error) { return Unwrap(intVal(1)) }); !strings.Contains(err.Error(), "expects a result") {
+		t.Errorf("unwrap non-result: %v", err)
+	}
+	if got := mustValue(t, func() (object.Object, error) { return UnwrapOr(errVal, intVal(7)) }); got.String() != "7" {
+		t.Errorf("unwrap_or fallback: got %s", got)
+	}
+	if got := mustValue(t, func() (object.Object, error) { return UnwrapOr(okVal, intVal(7)) }); got.String() != "42" {
+		t.Errorf("unwrap_or ok: got %s", got)
+	}
+	if err := mustErr(t, func() (object.Object, error) { return UnwrapOr(intVal(1), intVal(7)) }); !strings.Contains(err.Error(), "expects a result") {
+		t.Errorf("unwrap_or non-result: %v", err)
+	}
+}
+
+func TestResultEquality(t *testing.T) {
+	cases := []struct {
+		name string
+		a, b object.Object
+		want bool
+	}{
+		{"ok equal", object.Result{Ok: true, Value: intVal(1)}, object.Result{Ok: true, Value: intVal(1)}, true},
+		{"ok different value", object.Result{Ok: true, Value: intVal(1)}, object.Result{Ok: true, Value: intVal(2)}, false},
+		{"ok and err", object.Result{Ok: true, Value: intVal(1)}, object.Result{Ok: false, Message: "x"}, false},
+		{"err equal", object.Result{Ok: false, Message: "x"}, object.Result{Ok: false, Message: "x"}, true},
+		{"err different message", object.Result{Ok: false, Message: "x"}, object.Result{Ok: false, Message: "y"}, false},
+		{"ok and plain value", object.Result{Ok: true, Value: intVal(1)}, intVal(1), false},
+	}
+	for _, c := range cases {
+		if got := Equal(c.a, c.b); got != c.want {
+			t.Errorf("%s: got %v, want %v", c.name, got, c.want)
+		}
+	}
+}
+
 func TestSequence(t *testing.T) {
 	list := &object.List{Elems: []object.Object{intVal(1), intVal(2)}}
 	seq, err := Sequence(list)
@@ -235,5 +351,121 @@ func TestBuiltinArgContract(t *testing.T) {
 	}
 	if err := b.CheckArgs([]object.Object{intVal(1), intVal(2), intVal(3)}, "set"); err != nil {
 		t.Errorf("valid args failed: %v", err)
+	}
+}
+
+func TestBuiltinSelectResult(t *testing.T) {
+	first := object.NewChannel(0)
+	second := object.NewChannel(1)
+	if err := second.Send(object.Int{Value: 9}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := builtinSelect(&Context{}, []object.Object{
+		&object.List{Elems: []object.Object{first, second}},
+	}, source.Pos{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, ok := got.(object.Result)
+	if !ok || !result.Ok {
+		t.Fatalf("select result = %v, want ok", got)
+	}
+	selection, ok := result.Value.(*object.Map)
+	if !ok {
+		t.Fatalf("selection value = %T, want map", result.Value)
+	}
+	index, indexOK := selection.Get("index")
+	value, valueOK := selection.Get("value")
+	if !indexOK || !valueOK || !Equal(index, object.Int{Value: 1}) || !Equal(value, object.Int{Value: 9}) {
+		t.Fatalf("selection = %v, want index 1 and value 9", selection)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := second.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	closed := object.NewChannel(0)
+	if err := closed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	got, err = builtinSelect(&Context{}, []object.Object{&object.List{Elems: []object.Object{closed}}}, source.Pos{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, ok = got.(object.Result)
+	if !ok || result.Ok || result.Message != "all channels closed" {
+		t.Fatalf("closed select result = %v, want all-channels-closed error", got)
+	}
+}
+
+func TestSchedulerControls(t *testing.T) {
+	if got, err := builtinYield(&Context{}, nil, source.Pos{}); err != nil || got != object.NilValue {
+		t.Fatalf("yield() = (%v, %v), want nil", got, err)
+	}
+	if got, err := builtinSleep(&Context{}, []object.Object{intVal(0)}, source.Pos{}); err != nil || got != object.NilValue {
+		t.Fatalf("sleep(0) = (%v, %v), want nil", got, err)
+	}
+	if got, err := builtinSleep(&Context{}, []object.Object{intVal(1)}, source.Pos{}); err != nil || got != object.NilValue {
+		t.Fatalf("sleep(1) = (%v, %v), want nil", got, err)
+	}
+	if _, err := builtinSleep(&Context{}, []object.Object{object.Str{Value: "1"}}, source.Pos{}); err == nil || !strings.Contains(err.Error(), "must be an integer") {
+		t.Fatalf("sleep() type error = %v", err)
+	}
+	if _, err := builtinSleep(&Context{}, []object.Object{intVal(-1)}, source.Pos{}); err == nil || !strings.Contains(err.Error(), "cannot be negative") {
+		t.Fatalf("sleep() negative error = %v", err)
+	}
+	if _, err := builtinSleep(&Context{}, []object.Object{intVal(maxSleepMilliseconds + 1)}, source.Pos{}); err == nil || !strings.Contains(err.Error(), "too large") {
+		t.Fatalf("sleep() large error = %v", err)
+	}
+
+	done := make(chan struct{})
+	close(done)
+	ctx := &Context{Done: done}
+	if _, err := builtinYield(ctx, nil, source.Pos{}); err != object.ErrCancelled {
+		t.Fatalf("cancelled yield() error = %v, want cancellation", err)
+	}
+	if _, err := builtinSleep(ctx, []object.Object{intVal(1000)}, source.Pos{}); err != object.ErrCancelled {
+		t.Fatalf("cancelled sleep() error = %v, want cancellation", err)
+	}
+}
+
+func TestAwaitTimeout(t *testing.T) {
+	task := object.NewTask()
+	got, err := builtinAwait(&Context{}, []object.Object{task, intVal(0)}, source.Pos{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, ok := got.(object.Result)
+	if !ok || result.Ok || result.Message != object.ErrTaskTimeout.Error() {
+		t.Fatalf("await timeout = %v, want timeout result", got)
+	}
+
+	if _, err := builtinAwait(&Context{}, []object.Object{task, object.Str{Value: "1"}}, source.Pos{}); err == nil || !strings.Contains(err.Error(), "must be an integer") {
+		t.Fatalf("await() type error = %v", err)
+	}
+	if _, err := builtinAwait(&Context{}, []object.Object{task, intVal(-1)}, source.Pos{}); err == nil || !strings.Contains(err.Error(), "cannot be negative") {
+		t.Fatalf("await() negative error = %v", err)
+	}
+	if _, err := builtinAwait(&Context{}, []object.Object{task, intVal(maxSleepMilliseconds + 1)}, source.Pos{}); err == nil || !strings.Contains(err.Error(), "too large") {
+		t.Fatalf("await() large error = %v", err)
+	}
+
+	task.Complete(intVal(42), nil)
+	got, err = builtinAwait(&Context{}, []object.Object{task, intVal(0)}, source.Pos{})
+	if err != nil || got.String() != "ok(42)" {
+		t.Fatalf("ready await = (%v, %v), want ok(42)", got, err)
+	}
+}
+
+func TestModuleIndexMissingPreservesNil(t *testing.T) {
+	m := &object.Module{Name: "demo", Exports: map[string]object.Object{}}
+	v := mustValue(t, func() (object.Object, error) { return IndexGet(m, object.Str{Value: "private"}) })
+	if v.Type() != object.TypeNil {
+		t.Fatalf("missing indexed module member should be nil: %v", v)
+	}
+	if _, err := GetMember(m, "private"); err == nil {
+		t.Fatal("named access should reject unexported members")
 	}
 }

@@ -14,7 +14,7 @@ Save the code as `hello.spr`. Run it with `sprout run hello.spr`.
 
 ## Values and types
 
-Sprout has ten value types.
+Sprout has thirteen value types.
 
 - `int` holds a 64-bit integer.
 - `float` holds a 64-bit number.
@@ -25,7 +25,10 @@ Sprout has ten value types.
 - `map` holds keys and values. Keys are strings.
 - `function` is a callable value.
 - `range` is a sequence of integers.
-- `module` holds the exports of a loaded file.
+- `struct` is an instance of a struct type.
+- `struct type` is a struct declaration.
+- `method` is a method with a bound receiver.
+- `result` holds a value or an error message.
 
 Use the `type` function to ask for the type of a value.
 
@@ -205,6 +208,109 @@ print(filter(nums, fn(x) { return x % 2 == 0 }))
 print(fold(nums, 0, fn(acc, x) { return acc + x }))
 ```
 
+## Structs and methods
+
+A struct groups related values into one value.
+Declare it with the `struct` keyword.
+
+```sprout
+struct Point {
+    x
+    y
+}
+
+let origin = Point(0, 0)
+let labeled = Point(x: 1, y: 2)
+print(origin)          // Point{x: 0, y: 0}
+print(labeled.y)       // 2
+```
+
+A method belongs to a struct type.
+The method body reads the receiver through `self`.
+
+```sprout
+fn Point.sum() {
+    return self.x + self.y
+}
+
+print(labeled.sum())   // 3
+```
+
+## Interfaces
+
+An interface lists the methods a struct must provide.
+A struct satisfies it when it declares every method.
+
+```sprout
+interface Shape {
+    area()
+}
+
+struct Square { side }
+
+fn Square.area() {
+    return self.side * self.side
+}
+
+fn report(s: Shape) {
+    return "area " + str(s.area())
+}
+
+print(report(Square(side: 3)))   // area 9
+```
+
+Read `docs/structs.md` for the full reference.
+
+## Results and pattern matching
+
+A result carries a value or an error message.
+Use `ok` to mark success. Use `err` to mark failure.
+
+```sprout
+fn safe_div(a, b) {
+    if b == 0 {
+        return err("division by zero")
+    }
+    return ok(a / b)
+}
+
+print(safe_div(10, 2))   // ok(5)
+print(safe_div(1, 0))    // err("division by zero")
+```
+
+Use `match` to take a result apart.
+
+```sprout
+let r = safe_div(10, 2)
+
+print(match r {
+    ok(v) => { "result: " + str(v) },
+    err(m) => { "failed: " + m },
+    _ => { "unknown" },
+})
+```
+
+The `_` pattern matches any value.
+It is the catch-all arm that a match must end with.
+
+Match any value, not just results.
+
+```sprout
+fn describe(n) {
+    return match n {
+        0 => { "zero" },
+        1 => { "one" },
+        x => { "the number " + str(x) },
+    }
+}
+
+print(describe(1))       // one
+print(describe(42))      // the number 42
+```
+
+Read `docs/results.md` for the full reference.
+Read `docs/concurrency.md` for channels, tasks, and selection.
+
 ## Assertions
 
 The `assert` function checks a condition. It stops the program when the
@@ -213,6 +319,42 @@ condition is false. It is useful for tests and examples.
 ```sprout
 assert(2 + 2 == 4, "math still works")
 ```
+
+## Modules
+
+A module is a separate Sprout file. A program imports it and reads its
+exported names with a dot.
+
+Save `lib/math.spr`.
+
+```sprout
+export fn double(x) {
+    return x * 2
+}
+```
+
+Save `main.spr`.
+
+```sprout
+import "math" as m
+print(m.double(21))     // 42
+```
+
+The import binds the base name of the path. Use `as` to rename it.
+An import may only appear at the top level.
+An export may only appear in a module file.
+A module body runs once, even when several files import it.
+
+A project is a folder with a `sprout.toml` manifest. Create one with
+`sprout init`. Run it with `sprout run` from inside the project.
+
+```toml
+name = "my-project"
+entry = "main.spr"
+lib = ["lib"]
+```
+
+Bare imports search the project's `lib` directories.
 
 ## Interactive mode
 
@@ -226,46 +368,20 @@ sprout> x * 7
 sprout> :quit
 ```
 
-## Modules
-
-Split a program across files with `import` and `export`.
-A module runs once, in its own scope.
-Only exported names are visible to importers.
-
-```sprout
-// lib/math.spr
-export fn square(x) {
-    return x * x
-}
-```
-
-```sprout
-// main.spr
-import "lib/math"
-
-print(math["square"](5))   // 25
-```
-
-The bound name comes from the file name.
-Use `as` to choose a different name.
-
-```sprout
-import "lib/math" as m
-print(m["square"](5))      // 25
-```
-
-Module values are read-only namespaces.
-Exported functions share the module scope.
-They can call private helpers and keep module state.
-See `docs/modules.md` for the full reference.
-
 ## Bytecode virtual machine
 
-Sprout 0.3 adds a module system on top of the version 0.2 virtual machine.
-The VM shares the parser, the checker, and the standard library with the
-interpreter.
-The VM compiles imports into `IMPORT` instructions.
-It runs every module on a fresh VM with one shared loader.
+Sprout 0.2 added a stack-based bytecode virtual machine.
+Sprout 0.3 runs modules on both engines.
+Sprout 0.4 runs structs and methods on both engines.
+Sprout 0.5 runs results and match on both engines.
+Sprout 0.6 runs channels and tasks on both engines.
+Sprout 0.7 runs cooperative cancellation on both engines.
+Sprout 0.8 runs channel selection on both engines.
+Sprout 0.9 runs scheduler controls on both engines.
+Sprout 0.10 runs configurable scheduler policies on both engines.
+Sprout 0.11 runs configurable scheduler policies and bounded task waits on both engines.
+It shares the parser, the checker, and the standard library with the
+interpreter. The two engines produce the same results.
 
 Run a program on the VM.
 
@@ -281,10 +397,50 @@ sprout dis examples/hello.spr
 
 Read `docs/bytecode.md` for the full VM reference.
 
+## Scheduler controls
+
+Use `yield()` to give another task a scheduling opportunity.
+Use `sleep(milliseconds)` to pause the current task.
+Both controls observe cooperative cancellation.
+
+```sprout
+let events = channel(1)
+let worker = spawn(fn() {
+    send(events, "ready")
+    yield()
+    sleep(1)
+    send(events, "done")
+})
+print(unwrap(recv(events)))
+print(unwrap(recv(events)))
+print(unwrap(await(worker)))
+close(events)
+```
+
+The program prints `ready`, `done`, and `nil`.
+Read `docs/concurrency.md` for cancellation and scheduling details.
+
+Choose the task handoff policy when you run a program.
+
+```text
+sprout run -scheduler direct examples/scheduler.spr
+```
+
+The default `fair` policy calls the Go scheduler at `yield()`.
+The `direct` policy skips that explicit handoff.
+
+Bound a task wait with `await(task, milliseconds)`.
+Use zero to check readiness without waiting.
+An expired wait returns `err("task timed out")`.
+It does not cancel the task.
+
 ## Next steps
 
 Read the standard library reference in `docs/stdlib.md`.
+Read the structs and interfaces reference in `docs/structs.md`.
+Read the results and pattern matching reference in `docs/results.md`.
 Read the formal grammar in `docs/grammar.md`.
 Read the bytecode virtual machine in `docs/bytecode.md`.
 Read the module system in `docs/modules.md`.
+Read concurrency, cancellation, and timed waits in `docs/concurrency.md`.
 Run the example programs in the `examples` directory.

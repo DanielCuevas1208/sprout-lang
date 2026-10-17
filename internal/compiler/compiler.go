@@ -15,6 +15,7 @@ import (
 
 	"github.com/sprout-lang/sprout/internal/ast"
 	"github.com/sprout-lang/sprout/internal/code"
+	"github.com/sprout-lang/sprout/internal/module"
 	"github.com/sprout-lang/sprout/internal/object"
 	"github.com/sprout-lang/sprout/internal/runtime"
 	"github.com/sprout-lang/sprout/internal/source"
@@ -69,11 +70,33 @@ type Compiler struct {
 	loops []loopInfo
 	// builtins maps a standard library name to its index.
 	builtins map[string]uint16
+	// graph resolves import statements to module files.
+	graph *module.Graph
+	// programModules holds every compiled module, in compile order.
+	programModules []*code.ModuleRef
+	// moduleByPath dedupes modules by their canonical file path.
+	moduleByPath map[string]int
 }
 
 // Compile translates prog into a runnable program.
 func Compile(file *source.File, prog *ast.Program) (p *code.Program, err error) {
-	c := &Compiler{file: file, builtins: builtinIndex()}
+	g := module.NewGraph()
+	g.Entry = &module.File{Source: file, Prog: prog, Path: file.Name, Exports: map[string]source.Pos{}}
+	return CompileModules(g)
+}
+
+// CompileModules compiles an entry file and every module it imports.
+//
+// Each module becomes a function in the program's module table. An import
+// statement compiles to an OpImport that loads the module once and binds the
+// resulting module value to its local name.
+func CompileModules(g *module.Graph) (p *code.Program, err error) {
+	c := &Compiler{
+		file:         g.Entry.Source,
+		builtins:     builtinIndex(),
+		graph:        g,
+		moduleByPath: make(map[string]int),
+	}
 	defer func() {
 		if r := recover(); r != nil {
 			if ce, ok := r.(*compileError); ok {
@@ -83,11 +106,11 @@ func Compile(file *source.File, prog *ast.Program) (p *code.Program, err error) 
 			panic(r)
 		}
 	}()
-	c.pushFn(code.NewBuilder("<main>", file.Name, nil), newScope(nil))
-	c.compileStmts(prog.Stmts)
-	c.b().Add(code.OpReturn, endPos(prog.Stmts))
+	c.pushFn(code.NewBuilder("<main>", g.Entry.Source.Name, nil), newScope(nil))
+	c.compileStmts(g.Entry.Prog.Stmts)
+	c.b().Add(code.OpReturn, endPos(g.Entry.Prog.Stmts))
 	main := c.finishFn()
-	return &code.Program{Main: main}, nil
+	return &code.Program{Main: main, Modules: c.programModules}, nil
 }
 
 // compileError is the panic signal for internal compiler failures.
@@ -118,19 +141,6 @@ func endPos(stmts []ast.Stmt) source.Pos {
 		return stmts[len(stmts)-1].End()
 	}
 	return source.Pos{Line: 1, Column: 1}
-}
-
-// declaredName returns the name bound by an exported declaration.
-func declaredName(decl ast.Stmt) string {
-	switch d := decl.(type) {
-	case *ast.LetStmt:
-		if d.Name != nil {
-			return d.Name.Name
-		}
-	case *ast.FnStmt:
-		return d.Name.Name
-	}
-	return ""
 }
 
 func (c *Compiler) b() *code.Builder { return c.fns[len(c.fns)-1].b }
@@ -167,6 +177,61 @@ func (c *Compiler) enterFn(name string, params []*ast.Param, body *ast.Block) ui
 	prevLoops := c.loops
 	c.loops = nil
 	c.pushFn(code.NewBuilder(name, c.file.Name, paramNames), sc)
+	c.compileStmts(body.Stmts)
+	c.b().Add(code.OpReturn, endPos(body.Stmts))
+	fn := c.finishFn()
+	c.popFn()
+	c.loops = prevLoops
+	return c.b().Const(fn)
+}
+
+// compileStruct emits a struct declaration.
+//
+// The field names are pushed as constants and OpMakeStruct builds the type
+// value. The result is bound to the struct name.
+func (c *Compiler) compileStruct(n *ast.StructStmt) {
+	c.declare(n.Name.Name, true, n.Name.Position)
+	for _, f := range n.Fields {
+		idx := c.b().Const(object.Str{Value: f.Name})
+		c.b().AddU16(code.OpPushConst, idx, n.Name.Position)
+	}
+	nameIdx := c.b().Const(object.Str{Value: n.Name.Name})
+	c.b().AddU16Pair(code.OpMakeStruct, nameIdx, uint16(len(n.Fields)), n.StructPos)
+	c.emitSet(n.Name.Name, n.Name.Position)
+}
+
+// compileMethod emits a method declaration.
+//
+// The receiver type is loaded from its slot, the method body is compiled as
+// a closure, and OpAddMethod registers the pair on the type.
+func (c *Compiler) compileMethod(n *ast.FnStmt) {
+	nameIdx := c.b().Const(object.Str{Value: n.Name.Name})
+	c.emitGet(n.Receiver.Name, n.Receiver.Position)
+	idx := c.enterMethod(n.Receiver.Name, n.Name.Name, n.Params, n.Body)
+	c.b().AddU16(code.OpClosure, idx, n.FnPos)
+	c.b().AddU16(code.OpAddMethod, nameIdx, n.Name.Position)
+}
+
+// enterMethod compiles a method body and returns its constant index.
+//
+// A method reserves slot 0 for the implicit self receiver. The compiled
+// function's parameter list starts with self, so arity checks on the bound
+// method call match the receiver plus the declared parameters.
+func (c *Compiler) enterMethod(typeName, name string, params []*ast.Param, body *ast.Block) uint16 {
+	paramNames := make([]string, 0, len(params)+1)
+	paramNames = append(paramNames, "self")
+	for _, p := range params {
+		paramNames = append(paramNames, p.Name.Name)
+	}
+	sc := newScope(c.cur())
+	sc.names["self"] = &symbol{slot: 0}
+	for i, p := range params {
+		sc.names[p.Name.Name] = &symbol{slot: i + 1}
+	}
+	sc.nextSlot = 1 + len(params)
+	prevLoops := c.loops
+	c.loops = nil
+	c.pushFn(code.NewBuilder(typeName+"."+name, c.file.Name, paramNames), sc)
 	c.compileStmts(body.Stmts)
 	c.b().Add(code.OpReturn, endPos(body.Stmts))
 	fn := c.finishFn()
@@ -229,11 +294,11 @@ func (c *Compiler) popScope(envOff int, pos source.Pos) {
 // Function names are pre-declared so later statements and recursion can see
 // them. This mirrors the checker and the interpreter's forward references.
 func (c *Compiler) compileStmts(stmts []ast.Stmt) {
+	// Pre-declare function names so later statements and recursion can see
+	// them. Methods bind to a struct type instead of a name, so they are
+	// skipped. This mirrors the checker.
 	for _, s := range stmts {
-		if es, ok := s.(*ast.ExportStmt); ok {
-			s = es.Decl
-		}
-		if fn, ok := s.(*ast.FnStmt); ok {
+		if fn, ok := s.(*ast.FnStmt); ok && fn.Receiver == nil {
 			c.declare(fn.Name.Name, true, fn.Name.Position)
 		}
 	}
@@ -254,25 +319,22 @@ func (c *Compiler) compileStmt(s ast.Stmt) {
 		c.emitSet(n.Name.Name, n.KwPos)
 
 	case *ast.ImportStmt:
-		pathIdx := c.b().Const(object.Str{Value: n.Path})
-		c.b().AddU16(code.OpImport, pathIdx, n.ImportPos)
-		c.declare(n.Alias, true, n.ImportPos)
-		c.emitSet(n.Alias, n.ImportPos)
-
-	case *ast.ExportStmt:
-		c.compileStmt(n.Decl)
-		name := declaredName(n.Decl)
-		if name == "" {
-			c.failf(n.ExportPos, "internal error: unsupported exported declaration")
-		}
-		c.emitGet(name, n.ExportPos)
-		nameIdx := c.b().Const(object.Str{Value: name})
-		c.b().AddU16(code.OpExport, nameIdx, n.ExportPos)
+		c.compileImport(n)
 
 	case *ast.FnStmt:
+		if n.Receiver != nil {
+			c.compileMethod(n)
+			break
+		}
 		idx := c.enterFn(n.Name.Name, n.Params, n.Body)
 		c.b().AddU16(code.OpClosure, idx, n.FnPos)
 		c.emitSet(n.Name.Name, n.Name.Position)
+
+	case *ast.StructStmt:
+		c.compileStruct(n)
+
+	case *ast.InterfaceStmt:
+		// Interfaces are a static contract; they compile to nothing.
 
 	case *ast.ExprStmt:
 		c.compileExpr(n.X)
@@ -304,6 +366,81 @@ func (c *Compiler) compileStmt(s ast.Stmt) {
 	default:
 		c.failf(s.Pos(), "internal error: unsupported statement")
 	}
+}
+
+// compileImport emits the instructions that load a module and bind it.
+func (c *Compiler) compileImport(n *ast.ImportStmt) {
+	c.declare(n.Name.Name, true, n.Name.Position)
+	refIdx := c.moduleRef(n.Path, c.file.Name, n.PathPos)
+	c.b().AddU16(code.OpImport, uint16(refIdx), n.ImportPos)
+	c.emitSet(n.Name.Name, n.Name.Position)
+}
+
+// moduleRef returns the program index of the module named by spec.
+//
+// Each module file compiles to exactly one entry in the program's module
+// table. The table index is reserved before the module body compiles, so
+// nested imports cannot shift it.
+func (c *Compiler) moduleRef(spec, from string, pos source.Pos) int {
+	if c.graph == nil {
+		c.failf(pos, "cannot find module '%s'", spec)
+	}
+	f, ok := c.graph.Resolve(spec, from)
+	if !ok {
+		c.failf(pos, "cannot find module '%s'", spec)
+	}
+	if idx, ok := c.moduleByPath[f.Path]; ok {
+		return idx
+	}
+	idx := len(c.programModules)
+	c.moduleByPath[f.Path] = idx
+	c.programModules = append(c.programModules, &code.ModuleRef{})
+	c.programModules[idx] = &code.ModuleRef{
+		Name: c.graph.ModuleName(f),
+		Fn:   c.compileModuleFn(f),
+	}
+	return idx
+}
+
+// compileModuleFn compiles a module file into a function that returns a
+// module value.
+//
+// The module body runs in its own environment. Exported names stay local;
+// the function gathers their values into a map and wraps it in a module at
+// the end.
+func (c *Compiler) compileModuleFn(f *module.File) *code.Function {
+	prevFile := c.file
+	c.file = f.Source
+	name := c.graph.ModuleName(f)
+
+	sc := newScope(nil)
+	c.pushFn(code.NewBuilder("<module:"+name+">", f.Source.Name, nil), sc)
+	prevLoops := c.loops
+	c.loops = nil
+	c.compileStmts(f.Prog.Stmts)
+	c.emitExportsReturn(f, name)
+	fn := c.finishFn()
+	c.popFn()
+	c.loops = prevLoops
+	c.file = prevFile
+	return fn
+}
+
+// emitExportsReturn appends the instructions that build the module value.
+//
+// The exported names are read from their slots, gathered into a map, wrapped
+// in a module, and returned.
+func (c *Compiler) emitExportsReturn(f *module.File, name string) {
+	end := endPos(f.Prog.Stmts)
+	for _, exported := range f.ExportNames {
+		idx := c.b().Const(object.Str{Value: exported})
+		c.b().AddU16(code.OpPushConst, idx, end)
+		c.emitGet(exported, end)
+	}
+	c.b().AddU16(code.OpBuildMap, uint16(len(f.ExportNames)), end)
+	nameIdx := c.b().Const(object.Str{Value: name})
+	c.b().AddU16(code.OpMakeModule, nameIdx, end)
+	c.b().Add(code.OpReturnValue, end)
 }
 
 func (c *Compiler) compileIf(n *ast.IfStmt) {
@@ -472,6 +609,10 @@ func (c *Compiler) compileExpr(e ast.Expr) {
 		c.compileAssign(n)
 
 	case *ast.CallExpr:
+		if len(n.Named) > 0 {
+			c.compileStructLit(n)
+			break
+		}
 		if len(n.Args) > maxCallArgs {
 			c.failf(n.Lparen, "cannot call a function with more than %d arguments", maxCallArgs)
 		}
@@ -486,9 +627,17 @@ func (c *Compiler) compileExpr(e ast.Expr) {
 		c.compileExpr(n.Index)
 		c.b().Add(code.OpGetIndex, n.Lbracket)
 
+	case *ast.MemberExpr:
+		c.compileExpr(n.X)
+		idx := c.b().Const(object.Str{Value: n.Name.Name})
+		c.b().AddU16(code.OpGetMember, idx, n.DotPos)
+
 	case *ast.FnExpr:
 		idx := c.enterFn("", n.Params, n.Body)
 		c.b().AddU16(code.OpClosure, idx, n.FnPos)
+
+	case *ast.MatchExpr:
+		c.compileMatch(n)
 
 	default:
 		c.failf(e.Pos(), "internal error: unsupported expression")
@@ -563,9 +712,157 @@ func (c *Compiler) compileAssign(n *ast.AssignExpr) {
 		c.compileExpr(t.Index)
 		c.compileExpr(n.Value)
 		c.b().Add(code.OpSetIndex, n.OpPos)
+	case *ast.MemberExpr:
+		c.compileExpr(t.X)
+		c.compileExpr(n.Value)
+		idx := c.b().Const(object.Str{Value: t.Name.Name})
+		c.b().AddU16(code.OpSetMember, idx, n.OpPos)
 	default:
 		c.failf(n.OpPos, "internal error: invalid assignment target")
 	}
+}
+
+// compileStructLit emits a named struct literal.
+//
+// The struct type is loaded from its slot, then each named field is pushed
+// as a name/value pair. OpBuildStruct gathers the pairs and builds the
+// instance.
+func (c *Compiler) compileStructLit(n *ast.CallExpr) {
+	c.compileExpr(n.Callee)
+	for _, na := range n.Named {
+		nameIdx := c.b().Const(object.Str{Value: na.Name.Name})
+		c.b().AddU16(code.OpPushConst, nameIdx, na.Name.Position)
+		c.compileExpr(na.Value)
+	}
+	c.b().AddU16(code.OpBuildStruct, uint16(len(n.Named)), n.Lparen)
+}
+
+// patternJump is a failure jump emitted while testing a pattern.
+type patternJump struct {
+	off int
+	// result is true when off starts a TEST_RESULT instruction, whose jump
+	// operand follows a flag byte.
+	result bool
+}
+
+// compileMatch emits a match expression.
+//
+// The subject is pushed once. Each arm duplicates it, tests its pattern, and
+// runs its body when the pattern matches. A failed test jumps to the next
+// arm. The value each arm leaves on the stack is the match value.
+func (c *Compiler) compileMatch(n *ast.MatchExpr) {
+	c.compileExpr(n.Subject)
+	var ends []int
+	var pendingFails []patternJump
+	for _, arm := range n.Arms {
+		c.patchPatternJumps(pendingFails, c.b().Len())
+		// The subject is duplicated so the next arm can test it again.
+		c.b().Add(code.OpDup, arm.Pattern.Pos())
+		pendingFails = c.compilePatternTest(arm.Pattern, arm.Pattern.Pos())
+
+		// The arm body runs in a fresh scope. The pattern binds its variable
+		// into that scope, or the tested value is discarded. The subject copy
+		// is discarded either way.
+		envOff := c.b().AddU16(code.OpNewEnv, 0, arm.Body.Pos())
+		sc := newScope(c.cur())
+		c.pushFn(c.b(), sc)
+		if name, ok := patternVarName(arm.Pattern); ok {
+			c.declare(name, false, arm.Pattern.Pos())
+			c.b().AddU16(code.OpSetLocal, uint16(c.cur().names[name].slot), arm.Pattern.Pos())
+		} else {
+			c.b().Add(code.OpPop, arm.Pattern.Pos())
+		}
+		c.b().Add(code.OpPop, arm.Pattern.Pos())
+		c.compileStmtsLeavingValue(arm.Body.Stmts)
+		c.popScope(envOff, arm.Body.Pos())
+		ends = append(ends, c.b().AddU16(code.OpJump, 0, arm.Body.Pos()))
+	}
+	c.patchPatternJumps(pendingFails, c.b().Len())
+	// No arm matched (the checker forbids this): drop the subject.
+	c.b().Add(code.OpPop, n.MatchPos)
+	c.b().Add(code.OpNil, n.MatchPos)
+	end := c.b().Len()
+	for _, off := range ends {
+		c.b().PatchU16(off, uint16(end))
+	}
+}
+
+// patchPatternJumps sends every failure jump to the same target.
+func (c *Compiler) patchPatternJumps(jumps []patternJump, target int) {
+	for _, j := range jumps {
+		if j.result {
+			c.b().PatchResult(j.off, uint16(target))
+		} else {
+			c.b().PatchU16(j.off, uint16(target))
+		}
+	}
+}
+
+// compilePatternTest emits the instructions that test the value on top of the
+// stack against p.
+//
+// A test restores the value on success and cleans it up on failure, so the
+// caller can bind it and the next arm starts from the original subject. Every
+// failure path returns a jump that the caller patches to the next arm.
+func (c *Compiler) compilePatternTest(p ast.Pattern, pos source.Pos) []patternJump {
+	switch v := p.(type) {
+	case *ast.WildcardPattern:
+		return nil
+	case *ast.VarPattern:
+		return nil
+	case *ast.LitPattern:
+		// Duplicate the value, compare it with the literal, and keep it only
+		// when it matches. The failure path drops the leftover and jumps.
+		c.b().Add(code.OpDup, pos)
+		c.compileExpr(v.Value)
+		c.b().Add(code.OpEq, pos)
+		matched := c.b().AddU16(code.OpJumpIfTrue, 0, pos)
+		c.b().Add(code.OpPop, pos)
+		fail := c.b().AddU16(code.OpJump, 0, pos)
+		c.b().PatchU16(matched, uint16(c.b().Len()))
+		return []patternJump{{off: fail}}
+	case *ast.ResultPattern:
+		flag := byte(1)
+		if !v.IsOk {
+			flag = 0
+		}
+		jumps := []patternJump{{off: c.b().AddU16Byte(code.OpTestResult, flag, 0, pos), result: true}}
+		return append(jumps, c.compilePatternTest(v.Inner, pos)...)
+	}
+	return nil
+}
+
+// patternVarName returns the name a pattern binds, or "" when it binds
+// nothing. A pattern chain binds at most one variable, its innermost leaf.
+func patternVarName(p ast.Pattern) (string, bool) {
+	switch v := p.(type) {
+	case *ast.VarPattern:
+		return v.Ident.Name, true
+	case *ast.ResultPattern:
+		return patternVarName(v.Inner)
+	}
+	return "", false
+}
+
+// compileStmtsLeavingValue compiles a statement list so the value of the last
+// expression statement stays on the stack.
+//
+// This is the value of a match arm body. A body that ends in any other
+// statement, or that is empty, leaves nil. The interpreter mirrors this rule.
+func (c *Compiler) compileStmtsLeavingValue(stmts []ast.Stmt) {
+	for i, s := range stmts {
+		if i == len(stmts)-1 {
+			if es, ok := s.(*ast.ExprStmt); ok {
+				c.compileExpr(es.X)
+				return
+			}
+			c.compileStmt(s)
+			c.b().Add(code.OpNil, s.Pos())
+			return
+		}
+		c.compileStmt(s)
+	}
+	c.b().Add(code.OpNil, endPos(stmts))
 }
 
 // emitGet loads a name onto the stack.

@@ -1,0 +1,51 @@
+// structs.spr - structs, methods, and interfaces in action.
+
+struct Point {
+    x
+    y
+}
+
+fn Point.sum() {
+    return self.x + self.y
+}
+
+fn Point.magnitude() {
+    return sqrt(float(self.x * self.x + self.y * self.y))
+}
+
+struct Circle {
+    radius
+}
+
+interface Shape {
+    area()
+}
+
+fn Circle.area() {
+    return 3.14 * self.radius * self.radius
+}
+
+fn Circle.grow(factor) {
+    self.radius = self.radius * factor
+}
+
+fn describe(s: Shape) {
+    return "area " + str(round(s.area() * 100) / 100.0)
+}
+
+let a = Point(3, 4)
+let b = Point(x: 5, y: 7)
+print(a)
+print("sum:", a.sum())
+print("magnitude:", a.magnitude())
+print("fields:", a.x, a.y)
+
+a.x = 20
+print(a)
+
+let c = Circle(radius: 2)
+print(c)
+print("area:", round(c.area() * 100) / 100.0)
+c.grow(3)
+print("after grow:", c)
+print(describe(c))

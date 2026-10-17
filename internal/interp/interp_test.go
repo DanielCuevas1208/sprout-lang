@@ -365,3 +365,117 @@ print({"k": [1, 2]})
 print(range(0, 3))
 `, "[1, a, true, nil, 2.5]\n{k: [1, 2]}\nrange(0, 3)\n")
 }
+
+func TestResults(t *testing.T) {
+	expectOutput(t, `
+let r = ok(42)
+print(r)
+print(type(r))
+print(is_ok(r), is_err(r))
+print(unwrap(r))
+print(unwrap_or(err("x"), 7))
+print(ok(1) == ok(1))
+print(ok(1) == err("x"))
+`, "ok(42)\nresult\ntrue false\n42\n7\ntrue\nfalse\n")
+
+	expectOutput(t, `
+print(unwrap_or(ok(9), 0))
+print(is_ok(1), is_err(nil))
+`, "9\nfalse false\n")
+}
+
+func TestResultErrors(t *testing.T) {
+	expectError(t, `print(unwrap(err("oops")))`, "oops")
+	expectError(t, `print(unwrap(5))`, "expects a result")
+	expectError(t, `print(unwrap_or(5, 1))`, "expects a result")
+	expectError(t, `print(err(5))`, "expects a string")
+}
+
+func TestMatch(t *testing.T) {
+	expectOutput(t, `
+fn classify(n) {
+    return match n {
+        0 => { "zero" },
+        1 => { "one" },
+        _ => { "many" },
+    }
+}
+print(classify(0), classify(1), classify(9))
+`, "zero one many\n")
+
+	expectOutput(t, `
+let r = ok(7)
+print(match r {
+    ok(v) => { v * 2 },
+    err(e) => { 0 },
+    _ => { -1 },
+})
+let e = err("boom")
+print(match e {
+    ok(v) => { v },
+    err(m) => { "failed: " + m },
+    _ => { "?" },
+})
+`, "14\nfailed: boom\n")
+
+	expectOutput(t, `
+let total = 0
+for i in range(0, 4) {
+    total = total + match i {
+        0 => { 10 },
+        2 => { 20 },
+        _ => { i },
+    }
+}
+print(total)
+`, "34\n")
+
+	expectOutput(t, `
+let nested = ok(err("deep"))
+print(match nested {
+    ok(err(m)) => { "nested: " + m },
+    ok(v) => { "shallow" },
+    err(m) => { m },
+    _ => { "?" },
+})
+let good = ok(ok(5))
+print(match good {
+    ok(ok(x)) => { x },
+    _ => { 0 },
+})
+`, "nested: deep\n5\n")
+
+	expectOutput(t, `
+let x = 42
+print(match x {
+    v => { v + 1 },
+})
+print(match "hi" {
+    "hi" => { "yes" },
+    _ => { "no" },
+})
+print(match 2.5 {
+    2 => { "int" },
+    2.5 => { "float" },
+    _ => { "other" },
+})
+`, "43\nyes\nfloat\n")
+
+	expectOutput(t, `
+match ok(1) {
+    ok(v) => { print("matched " + str(v)) },
+    _ => { print("no") },
+}
+`, "matched 1\n")
+}
+
+func TestMatchRuntimeError(t *testing.T) {
+	// A match arm can raise a runtime error inside its body.
+	expectError(t, `
+let r = ok(1)
+print(match r {
+    ok(v) => { 1 / 0 },
+    _ => { 0 },
+})
+`, "cannot divide by zero")
+}

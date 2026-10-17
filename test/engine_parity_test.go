@@ -2,14 +2,11 @@ package test
 
 import (
 	"errors"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/sprout-lang/sprout/internal/checker"
 	"github.com/sprout-lang/sprout/internal/compiler"
-	"github.com/sprout-lang/sprout/internal/diag"
 	"github.com/sprout-lang/sprout/internal/interp"
 	"github.com/sprout-lang/sprout/internal/parser"
 	"github.com/sprout-lang/sprout/internal/source"
@@ -146,6 +143,136 @@ print(type([1]))
 print(str(42))
 print(int("42"))
 print(round(2.5))`,
+		`struct Point { x y }
+fn Point.sum() { return self.x + self.y }
+let a = Point(1, 2)
+let b = Point(x: 3, y: 4)
+print(a)
+print(a.sum(), b.sum())
+a.x = 9
+print(a)
+print(a.sum())`,
+		`struct Circle { radius }
+struct Square { side }
+interface Shape { area() }
+fn Circle.area() { return 3.14 * self.radius * self.radius }
+fn Square.area() { return self.side * self.side }
+let shapes = [Circle(radius: 2), Square(side: 3)]
+print(shapes[0].area(), shapes[1].area())
+let total = 0.0
+for s in shapes {
+    total = total + s.area()
+}
+print(round(total * 100) / 100.0)`,
+		`struct Tally { total }
+fn Tally.add(n) {
+    self.total = self.total + n
+    return self.total
+}
+let t = Tally(0)
+print(t.add(2), t.add(3))
+print(t.total)`,
+		`struct Box { v }
+fn Box.get() { return self.v }
+let b = Box(41)
+let g = b.get
+print(g() + 1)`,
+		`struct Node { name }
+fn Node.greet(prefix) {
+    return prefix + " " + self.name
+}
+let n = Node("sprout")
+print(n.greet("hello"))
+print(type(n))
+print(type(Node))
+print(type(n.greet))`,
+		`fn safe_div(a, b) {
+    if b == 0 {
+        return err("division by zero")
+    }
+    return ok(a / b)
+}
+print(match safe_div(10, 2) {
+    ok(v) => { v },
+    err(m) => { 0 },
+    _ => { -1 },
+})
+print(match safe_div(1, 0) {
+    ok(v) => { v },
+    err(m) => { "error: " + m },
+    _ => { "?" },
+})`,
+		`let total = 0
+for i in range(0, 5) {
+    total = total + match i {
+        0 => { 10 },
+        3 => { 30 },
+        _ => { i },
+    }
+}
+print(total)`,
+		`let nested = ok(err("deep"))
+print(match nested {
+    ok(err(m)) => { "nested: " + m },
+    ok(v) => { "shallow" },
+    err(m) => { m },
+    _ => { "?" },
+})
+print(match ok(ok(6)) {
+    ok(ok(x)) => { x },
+    _ => { 0 },
+})`,
+		`fn describe(n) {
+    return match n {
+        0 => { "zero" },
+        1 => { "one" },
+        v => { "other " + str(v) },
+    }
+}
+print(describe(0), describe(1), describe(7))`,
+		`let r = ok(ok("nested"))
+print(match r {
+    ok(ok(v)) => { v },
+    _ => { "?" },
+})
+print(unwrap(r))`,
+		`let score = 5
+let label = match score {
+    5 => { "five" },
+    _ => { "other" },
+}
+print(label)
+let r = err("nope")
+print(unwrap_or(r, "fallback"))`,
+		`let double = match ok(5) {
+    ok(v) => {
+        let get = fn() { return v }
+        get() * 2
+    },
+    _ => { 0 },
+}
+print(double)`,
+		`let jobs = channel()
+let left = spawn(fn() {
+    send(jobs, 20)
+    return "left"
+})
+let right = spawn(fn() {
+    send(jobs, 22)
+    return "right"
+})
+print(unwrap(recv(jobs)) + unwrap(recv(jobs)))
+print(unwrap(await(left)), unwrap(await(right)))`,
+		`let gate = channel()
+let worker = spawn(fn() {
+    let signal = recv(gate)
+    if is_cancelled() {
+        return "stopped"
+    }
+    return signal
+})
+cancel(worker)
+print(unwrap_or(await(worker), "cancelled"))`,
 	}
 
 	for _, src := range cases {
@@ -175,6 +302,21 @@ func TestEnginesAgreeOnErrors(t *testing.T) {
 		"[1, 2][9]",
 		`fn f(a) { return a } f()`,
 		"print(1())",
+		`struct Point { x }
+let p = Point(1)
+print(p.missing)`,
+		`struct Point { x }
+let p = Point(1)
+p.missing = 2`,
+		"print(unwrap(err(\"boom\")))",
+		`fn fail() {
+    return err("kaboom")
+}
+print(match fail() {
+    ok(v) => { v },
+    err(m) => { 1 / 0 },
+    _ => { 0 },
+})`,
 	}
 	for _, src := range cases {
 		ivOut, ivErr := runInterpSrc(src)
@@ -192,125 +334,81 @@ func TestEnginesAgreeOnErrors(t *testing.T) {
 	}
 }
 
-// runInterpFile runs the Sprout file at path on the tree-walking interpreter.
-func runInterpFile(path string) (string, error) {
-	text, err := os.ReadFile(path)
-	if err != nil {
-		return "", err
+func TestEnginesAgreeOnSelect(t *testing.T) {
+	src := `let first = channel()
+let second = channel(1)
+send(second, 7)
+let event = unwrap(select([first, second]))
+print(event["index"], event["value"])
+close(first)
+close(second)
+print(unwrap_or(select([first, second]), "all closed"))`
+	ivOut, ivErr := runInterpSrc(src)
+	vmOut, vmErr := runVMSrc(src)
+	if ivErr != nil || vmErr != nil {
+		t.Fatalf("select errors: interpreter=%v vm=%v", ivErr, vmErr)
 	}
-	var stdout, stderr strings.Builder
-	iv := interp.NewWithIO(strings.NewReader(""), &stdout, &stderr)
-	file := source.NewFile(path, string(text))
-	prog, diags := parser.Parse(file)
-	for _, d := range diags {
-		if d.Severity == diag.SeverityError {
-			return "", errors.New("parse error: " + d.Message)
-		}
+	if ivOut != vmOut {
+		t.Fatalf("select engines differ: interp=%q vm=%q", ivOut, vmOut)
 	}
-	_, rerr := iv.Exec(file, prog)
-	if rerr != nil {
-		return stdout.String(), rerr
-	}
-	return stdout.String(), nil
-}
-
-// runVMFile runs the Sprout file at path on the bytecode virtual machine.
-func runVMFile(path string) (string, error) {
-	text, err := os.ReadFile(path)
-	if err != nil {
-		return "", err
-	}
-	var stdout, stderr strings.Builder
-	file := source.NewFile(path, string(text))
-	prog, diags := parser.Parse(file)
-	for _, d := range diags {
-		if d.Severity == diag.SeverityError {
-			return "", errors.New("parse error: " + d.Message)
-		}
-	}
-	if diags := checker.Check(file, prog); len(diags) > 0 {
-		return "", errors.New(diags[0].Message)
-	}
-	compiled, err := compiler.Compile(file, prog)
-	if err != nil {
-		return "", err
-	}
-	machine := vm.NewWithIO(strings.NewReader(""), &stdout, &stderr)
-	_, rerr := machine.Run(file, compiled)
-	if rerr != nil {
-		return stdout.String(), rerr
-	}
-	return stdout.String(), nil
-}
-
-// writeTestModule writes a module file under dir, creating subdirectories.
-func writeTestModule(t *testing.T, dir, name, src string) {
-	t.Helper()
-	path := filepath.Join(dir, name)
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
-		t.Fatal(err)
+	want := "1 7\nall closed\n"
+	if ivOut != want {
+		t.Fatalf("select output = %q, want %q", ivOut, want)
 	}
 }
 
-// TestEnginesAgreeOnModules runs programs that import modules on both
-// engines and checks that their output matches.
-//
-// Modules exercise the loader, the module cache, and cross-module closures,
-// so they stress the deepest shared parts of the two engines.
-func TestEnginesAgreeOnModules(t *testing.T) {
-	dir := t.TempDir()
-	writeTestModule(t, dir, "lib/numbers.spr", "export fn square(x) { return x * x }\nexport fn cube(x) { return x * x * x }\nexport const answer = 42\n")
-	writeTestModule(t, dir, "lib/strings.spr", "export fn shout(s) { return upper(s) + \"!\" }\n")
-	writeTestModule(t, dir, "lib/bank.spr", "let balance = 0\nexport fn deposit(amount) { balance = balance + amount }\nexport fn total() { return balance }\n")
-
-	mainSrc := `
-import "lib/numbers"
-import "lib/strings" as text
-import "lib/bank"
-print(numbers["square"](7))
-print(numbers["cube"](3))
-print(numbers["answer"])
-print(text["shout"]("hi"))
-bank["deposit"](10)
-bank["deposit"](5)
-print(bank["total"]())
-print(bank["hidden"])
-print(type(bank))
-`
-	mainPath := filepath.Join(dir, "main.spr")
-	writeTestModule(t, dir, "main.spr", mainSrc)
-
-	interpOut, interpErr := runInterpFile(mainPath)
-	vmOut, vmErr := runVMFile(mainPath)
-	if interpErr != nil {
-		t.Errorf("interpreter error: %v", interpErr)
+func TestEnginesAgreeOnSchedulerControls(t *testing.T) {
+	src := `let events = channel(1)
+let worker = spawn(fn() {
+    send(events, "started")
+    yield()
+    sleep(1)
+    send(events, "finished")
+    return "done"
+})
+print(unwrap(recv(events)))
+print(unwrap(recv(events)))
+print(unwrap(await(worker)))
+let canceled = spawn(fn() {
+    sleep(1000)
+    return "finished"
+})
+cancel(canceled)
+print(unwrap_or(await(canceled), "cancelled"))
+close(events)`
+	ivOut, ivErr := runInterpSrc(src)
+	vmOut, vmErr := runVMSrc(src)
+	if ivErr != nil || vmErr != nil {
+		t.Fatalf("scheduler errors: interpreter=%v vm=%v", ivErr, vmErr)
 	}
-	if vmErr != nil {
-		t.Errorf("vm error: %v", vmErr)
+	if ivOut != vmOut {
+		t.Fatalf("scheduler engines differ: interp=%q vm=%q", ivOut, vmOut)
 	}
-	if interpOut != vmOut {
-		t.Errorf("engines differ for modules:\ninterp: %q\n    vm: %q", interpOut, vmOut)
+	want := "started\nfinished\ndone\ncancelled\n"
+	if ivOut != want {
+		t.Fatalf("scheduler output = %q, want %q", ivOut, want)
 	}
 }
 
-// TestEnginesAgreeOnModuleErrors checks that both engines report the same
-// message when an import fails.
-func TestEnginesAgreeOnModuleErrors(t *testing.T) {
-	dir := t.TempDir()
-	writeTestModule(t, dir, "a.spr", `import "b"`)
-	writeTestModule(t, dir, "b.spr", `import "a"`)
-	mainPath := filepath.Join(dir, "main.spr")
-	writeTestModule(t, dir, "main.spr", `import "a"`)
-
-	_, interpErr := runInterpFile(mainPath)
-	_, vmErr := runVMFile(mainPath)
-	if interpErr == nil || vmErr == nil {
-		t.Fatalf("expected both engines to fail, interp: %v vm: %v", interpErr, vmErr)
+func TestEnginesAgreeOnTimedAwait(t *testing.T) {
+	src := `let gate = channel()
+let task = spawn(fn() {
+    recv(gate)
+    return "ready"
+})
+print(unwrap_or(await(task, 1), "timed out"))
+cancel(task)
+print(unwrap_or(await(task), "cancelled"))
+close(gate)`
+	ivOut, ivErr := runInterpSrc(src)
+	vmOut, vmErr := runVMSrc(src)
+	if ivErr != nil || vmErr != nil {
+		t.Fatalf("timed await errors: interpreter=%v vm=%v", ivErr, vmErr)
 	}
-	if interpErr.Error() != vmErr.Error() {
-		t.Errorf("error messages differ:\ninterp: %q\n    vm: %q", interpErr.Error(), vmErr.Error())
+	if ivOut != vmOut {
+		t.Fatalf("timed await engines differ: interp=%q vm=%q", ivOut, vmOut)
+	}
+	if want := "timed out\ncancelled\n"; ivOut != want {
+		t.Fatalf("timed await output = %q, want %q", ivOut, want)
 	}
 }

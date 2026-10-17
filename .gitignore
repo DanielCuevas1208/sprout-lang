@@ -5,6 +5,9 @@
 *.test
 *.out
 
+# Sprout build output
+/out/
+
 # Editor and OS files
 .vscode/
 .idea/
@@ -16,3 +19,8 @@ Thumbs.db
 # Go artifacts
 vendor/
 coverage.out
+
+# Local Go build cache
+.cache-go/
+.cache-mod/
+.tmp-go/

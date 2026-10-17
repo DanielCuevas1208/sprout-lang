@@ -1,0 +1,9 @@
+Point{x: 3, y: 4}
+sum: 7
+magnitude: 5.0
+fields: 3 4
+Point{x: 20, y: 4}
+Circle{radius: 2}
+area: 12.56
+after grow: Circle{radius: 6}
+area 113.04

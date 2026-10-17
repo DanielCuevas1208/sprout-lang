@@ -14,14 +14,11 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
+	"sync"
 
-	"github.com/sprout-lang/sprout/internal/ast"
 	"github.com/sprout-lang/sprout/internal/code"
-	"github.com/sprout-lang/sprout/internal/compiler"
 	"github.com/sprout-lang/sprout/internal/diag"
-	"github.com/sprout-lang/sprout/internal/module"
 	"github.com/sprout-lang/sprout/internal/object"
 	"github.com/sprout-lang/sprout/internal/runtime"
 	"github.com/sprout-lang/sprout/internal/source"
@@ -48,6 +45,7 @@ func (c *Closure) String() string {
 // Env is a lexical environment. It mirrors one compiler scope.
 type Env struct {
 	parent *Env
+	mu     sync.RWMutex
 	slots  []object.Object
 }
 
@@ -102,11 +100,12 @@ type VM struct {
 	ctx    runtime.Context
 	stack  []object.Object
 	frames []*frame
-	// loader resolves import instructions to module values.
-	loader *module.Loader
-	// exports records the exported names of the current run. Only the
-	// module path of a run fills it; the entry program ignores it.
-	exports map[string]object.Object
+	// prog is the program being executed. OpImport reads its module table.
+	prog *code.Program
+	// modules caches loaded modules so each one runs once per Run.
+	modules map[string]object.Object
+	// moduleStack tracks modules whose bodies are currently running.
+	moduleStack []string
 }
 
 // New returns a VM wired to the process standard streams.
@@ -118,15 +117,25 @@ func New() *VM {
 func NewWithIO(stdin io.Reader, stdout, stderr io.Writer) *VM {
 	vm := &VM{}
 	vm.ctx = runtime.Context{
-		Stdin:  stdin,
-		Stdout: stdout,
-		Stderr: stderr,
+		Stdin:     stdin,
+		Stdout:    stdout,
+		Stderr:    stderr,
+		Scheduler: runtime.DefaultScheduler(),
 		Call: func(fn object.Object, args []object.Object, pos source.Pos) object.Object {
 			return vm.callValue(fn, args, pos)
 		},
+		Spawn: vm.spawn,
 	}
-	vm.loader = module.New(vm)
 	return vm
+}
+
+// SetScheduler configures scheduling for this VM and its child tasks. A nil
+// scheduler restores the default fair policy.
+func (vm *VM) SetScheduler(s runtime.Scheduler) {
+	if s == nil {
+		s = runtime.DefaultScheduler()
+	}
+	vm.ctx.Scheduler = s
 }
 
 // Run executes the compiled program.
@@ -135,12 +144,18 @@ func NewWithIO(stdin io.Reader, stdout, stderr io.Writer) *VM {
 // *RunError when the program stops with a runtime error.
 func (vm *VM) Run(file *source.File, prog *code.Program) (val object.Object, rerr *RunError) {
 	prevStack, prevFrames := vm.stack, vm.frames
+	prevProg, prevModules, prevStack_ := vm.prog, vm.modules, vm.moduleStack
 	vm.stack = vm.stack[:0]
 	vm.frames = vm.frames[:0]
-	vm.exports = nil
+	vm.prog = prog
+	vm.modules = make(map[string]object.Object)
+	vm.moduleStack = nil
 	defer func() {
 		vm.stack = prevStack
 		vm.frames = prevFrames
+		vm.prog = prevProg
+		vm.modules = prevModules
+		vm.moduleStack = prevStack_
 		if r := recover(); r != nil {
 			if e, ok := r.(*vmErr); ok {
 				val, rerr = nil, &RunError{Message: e.msg, File: file, Pos: e.pos, Frames: e.frames}
@@ -194,6 +209,37 @@ func (vm *VM) envAt(fr *frame, depth int) *Env {
 	return e
 }
 
+// importModule loads the module at idx in the program's module table.
+//
+// The module body runs once. Later imports reuse the cached value. A module
+// that imports itself, directly or indirectly, is an import cycle.
+func (vm *VM) importModule(idx int, pos source.Pos) {
+	ref := vm.prog.Modules[idx]
+	if m, ok := vm.modules[ref.Name]; ok {
+		vm.push(m)
+		return
+	}
+	if inModuleStack(vm.moduleStack, ref.Name) {
+		vm.failAtPos(fmt.Sprintf("import cycle involving '%s'", ref.Name), pos)
+	}
+	vm.moduleStack = append(vm.moduleStack, ref.Name)
+	env := &Env{slots: make([]object.Object, ref.Fn.NumSlots)}
+	cl := &Closure{fn: ref.Fn, env: env}
+	m := vm.callValue(cl, nil, pos)
+	vm.moduleStack = vm.moduleStack[:len(vm.moduleStack)-1]
+	vm.modules[ref.Name] = m
+	vm.push(m)
+}
+
+func inModuleStack(stack []string, name string) bool {
+	for _, n := range stack {
+		if n == name {
+			return true
+		}
+	}
+	return false
+}
+
 // callValue invokes a closure or builtin with the given arguments.
 func (vm *VM) callValue(callee object.Object, args []object.Object, pos source.Pos) object.Object {
 	switch c := callee.(type) {
@@ -204,7 +250,7 @@ func (vm *VM) callValue(callee object.Object, args []object.Object, pos source.P
 		}
 		env := &Env{parent: c.env, slots: make([]object.Object, c.fn.NumSlots)}
 		for i, a := range args {
-			env.slots[i] = a
+			env.set(i, a)
 		}
 		before := len(vm.frames)
 		vm.frames = append(vm.frames, &frame{
@@ -216,6 +262,38 @@ func (vm *VM) callValue(callee object.Object, args []object.Object, pos source.P
 			callPos: pos,
 		})
 		return vm.runFrames(before)
+
+	case *object.BoundMethod:
+		cl, ok := c.Method.(*Closure)
+		if !ok {
+			vm.failAtPos("cannot call this method value", pos)
+		}
+		if len(args) != len(cl.fn.ParamNames)-1 {
+			vm.failAtPos(fmt.Sprintf("method '%s' expects %d arguments, got %d",
+				c.Name, len(cl.fn.ParamNames)-1, len(args)), pos)
+		}
+		env := &Env{parent: cl.env, slots: make([]object.Object, cl.fn.NumSlots)}
+		env.set(0, c.Receiver)
+		for i, a := range args {
+			env.set(i+1, a)
+		}
+		before := len(vm.frames)
+		vm.frames = append(vm.frames, &frame{
+			cl:      cl,
+			fn:      cl.fn,
+			env:     env,
+			ip:      0,
+			base:    len(vm.stack),
+			callPos: pos,
+		})
+		return vm.runFrames(before)
+
+	case *object.StructType:
+		s, err := c.Construct(args)
+		if err != nil {
+			vm.failAtPos(err.Error(), pos)
+		}
+		return s
 
 	case *runtime.Builtin:
 		if err := c.CheckArgs(args, c.Name); err != nil {
@@ -229,32 +307,6 @@ func (vm *VM) callValue(callee object.Object, args []object.Object, pos source.P
 	}
 	vm.failAtPos(fmt.Sprintf("cannot call a %s", callee.Type()), pos)
 	return nil
-}
-
-// loadModule loads the module at path as a value.
-//
-// fileName is the compiled file that contains the import instruction. Its
-// directory resolves relative import paths.
-func (vm *VM) loadModule(path, fileName string) (*object.Module, error) {
-	return vm.loader.Load(path, filepath.Dir(fileName))
-}
-
-// RunModule executes a module file on a fresh VM and returns its exports.
-//
-// The module runs on a fresh VM that shares the streams and the loader of
-// the importer. Sharing the loader keeps the module cache and the
-// circular-import guard across the whole import graph.
-func (vm *VM) RunModule(path string, file *source.File, prog *ast.Program) (map[string]object.Object, error) {
-	sub := NewWithIO(vm.ctx.Stdin, vm.ctx.Stdout, vm.ctx.Stderr)
-	sub.loader = vm.loader
-	compiled, err := compiler.Compile(file, prog)
-	if err != nil {
-		return nil, err
-	}
-	if _, rerr := sub.Run(file, compiled); rerr != nil {
-		return nil, rerr
-	}
-	return sub.exports, nil
 }
 
 // runFrames executes instructions until the frame stack reaches until.
@@ -299,21 +351,21 @@ func (vm *VM) runFrames(until int) object.Object {
 			fr.ip++
 		case code.OpGetLocal:
 			slot := int(code.U16(fn.Code, fr.ip+1))
-			vm.push(fr.env.slots[slot])
+			vm.push(fr.env.get(slot))
 			fr.ip += 3
 		case code.OpSetLocal:
 			slot := int(code.U16(fn.Code, fr.ip+1))
-			fr.env.slots[slot] = vm.pop()
+			fr.env.set(slot, vm.pop())
 			fr.ip += 3
 		case code.OpGetUp:
 			depth := int(code.U16(fn.Code, fr.ip+1))
 			slot := int(code.U16(fn.Code, fr.ip+3))
-			vm.push(vm.envAt(fr, depth).slots[slot])
+			vm.push(vm.envAt(fr, depth).get(slot))
 			fr.ip += 5
 		case code.OpSetUp:
 			depth := int(code.U16(fn.Code, fr.ip+1))
 			slot := int(code.U16(fn.Code, fr.ip+3))
-			vm.envAt(fr, depth).slots[slot] = vm.pop()
+			vm.envAt(fr, depth).set(slot, vm.pop())
 			fr.ip += 5
 		case code.OpBuiltin:
 			vm.push(runtime.Builtins[code.U16(fn.Code, fr.ip+1)])
@@ -323,22 +375,6 @@ func (vm *VM) runFrames(until int) object.Object {
 			f := fn.Consts[idx].(*code.Function)
 			vm.push(&Closure{fn: f, env: fr.env})
 			fr.ip += 3
-		case code.OpImport:
-			pos := fr.pos()
-			path := fn.Consts[code.U16(fn.Code, fr.ip+1)].(object.Str).Value
-			fr.ip += 3
-			mod, err := vm.loadModule(path, fn.FileName)
-			if err != nil {
-				vm.failAtPos(err.Error(), pos)
-			}
-			vm.push(mod)
-		case code.OpExport:
-			name := fn.Consts[code.U16(fn.Code, fr.ip+1)].(object.Str).Value
-			fr.ip += 3
-			if vm.exports == nil {
-				vm.exports = make(map[string]object.Object)
-			}
-			vm.exports[name] = vm.pop()
 		case code.OpCall:
 			n := int(fn.Code[fr.ip+1])
 			pos := fr.pos()
@@ -383,6 +419,79 @@ func (vm *VM) runFrames(until int) object.Object {
 				vm.failAtPos(err.Error(), pos)
 			}
 			vm.push(v)
+		case code.OpImport:
+			pos := fr.pos()
+			idx := int(code.U16(fn.Code, fr.ip+1))
+			fr.ip += 3
+			vm.importModule(idx, pos)
+		case code.OpMakeModule:
+			name := fn.Consts[code.U16(fn.Code, fr.ip+1)].(object.Str).Value
+			m := vm.pop().(*object.Map)
+			exports := make(map[string]object.Object, len(m.Keys))
+			for _, k := range m.Keys {
+				exports[k] = m.Vals[k]
+			}
+			vm.push(&object.Module{Name: name, Exports: exports})
+			fr.ip += 3
+		case code.OpMakeStruct:
+			name := fn.Consts[code.U16(fn.Code, fr.ip+1)].(object.Str).Value
+			count := int(code.U16(fn.Code, fr.ip+3))
+			fields := make([]string, count)
+			for i := count - 1; i >= 0; i-- {
+				s := vm.pop().(object.Str)
+				fields[i] = s.Value
+			}
+			vm.push(&object.StructType{Name: name, Fields: fields, Methods: make(map[string]object.Object)})
+			fr.ip += 5
+		case code.OpAddMethod:
+			pos := fr.pos()
+			name := fn.Consts[code.U16(fn.Code, fr.ip+1)].(object.Str).Value
+			method := vm.pop()
+			st := vm.pop().(*object.StructType)
+			if st.HasField(name) {
+				vm.failAtPos(fmt.Sprintf("method '%s' conflicts with a field of struct '%s'", name, st.Name), pos)
+			}
+			// Re-registration overrides the previous method.
+			st.Methods[name] = method
+			fr.ip += 3
+		case code.OpGetMember:
+			pos := fr.pos()
+			fr.ip++
+			name := fn.Consts[code.U16(fn.Code, fr.ip)].(object.Str).Value
+			fr.ip += 2
+			v, err := runtime.GetMember(vm.pop(), name)
+			if err != nil {
+				vm.failAtPos(err.Error(), pos)
+			}
+			vm.push(v)
+		case code.OpSetMember:
+			pos := fr.pos()
+			fr.ip++
+			name := fn.Consts[code.U16(fn.Code, fr.ip)].(object.Str).Value
+			fr.ip += 2
+			value := vm.pop()
+			container := vm.pop()
+			v, err := runtime.SetMember(container, name, value)
+			if err != nil {
+				vm.failAtPos(err.Error(), pos)
+			}
+			vm.push(v)
+		case code.OpBuildStruct:
+			pos := fr.pos()
+			count := int(code.U16(fn.Code, fr.ip+1))
+			fr.ip += 3
+			names := make([]string, count)
+			values := make([]object.Object, count)
+			for i := count - 1; i >= 0; i-- {
+				values[i] = vm.pop()
+				names[i] = vm.pop().(object.Str).Value
+			}
+			st := vm.pop().(*object.StructType)
+			s, err := st.ConstructNamed(names, values)
+			if err != nil {
+				vm.failAtPos(err.Error(), pos)
+			}
+			vm.push(s)
 		case code.OpSetIndex:
 			pos := fr.pos()
 			fr.ip++
@@ -444,6 +553,20 @@ func (vm *VM) runFrames(until int) object.Object {
 				vm.push(iter.items[iter.index])
 				iter.index++
 				fr.ip += 3
+			}
+		case code.OpTestResult:
+			wantOk := fn.Code[fr.ip+1] == 1
+			target := int(code.U16(fn.Code, fr.ip+2))
+			value := vm.pop()
+			if r, ok := value.(object.Result); ok && r.Ok == wantOk {
+				if r.Ok {
+					vm.push(r.Value)
+				} else {
+					vm.push(object.Str{Value: r.Message})
+				}
+				fr.ip += 4
+			} else {
+				fr.ip = target
 			}
 		case code.OpNeg:
 			pos := fr.pos()
@@ -528,4 +651,16 @@ func compareResult(cmp int, op code.Opcode) bool {
 		return cmp >= 0
 	}
 	return false
+}
+
+func (e *Env) get(slot int) object.Object {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.slots[slot]
+}
+
+func (e *Env) set(slot int, value object.Object) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.slots[slot] = value
 }

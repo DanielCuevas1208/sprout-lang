@@ -10,7 +10,6 @@ package code
 
 import (
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/sprout-lang/sprout/internal/object"
@@ -63,8 +62,14 @@ const (
 	OpLe
 	OpGt
 	OpGe
-	OpImport // uint16 index into Consts: load a module and push it
-	OpExport // uint16 index into Consts: record the top as an export
+	OpImport      // uint16 index into Program.Modules
+	OpMakeModule  // uint16 index of the module name constant
+	OpMakeStruct  // uint16 type-name constant, uint16 field count
+	OpAddMethod   // uint16 method-name constant
+	OpGetMember   // uint16 member-name constant
+	OpSetMember   // uint16 member-name constant
+	OpBuildStruct // uint16 count of named field/value pairs
+	OpTestResult  // byte ok-flag, uint16 target
 )
 
 // opNames maps an opcode to its disassembly name.
@@ -110,7 +115,13 @@ var opNames = map[Opcode]string{
 	OpGt:          "GT",
 	OpGe:          "GE",
 	OpImport:      "IMPORT",
-	OpExport:      "EXPORT",
+	OpMakeModule:  "MAKE_MODULE",
+	OpMakeStruct:  "MAKE_STRUCT",
+	OpAddMethod:   "ADD_METHOD",
+	OpGetMember:   "GET_MEMBER",
+	OpSetMember:   "SET_MEMBER",
+	OpBuildStruct: "BUILD_STRUCT",
+	OpTestResult:  "TEST_RESULT",
 }
 
 // String returns the disassembly name of an opcode.
@@ -150,9 +161,19 @@ func (f *Function) String() string {
 	return "<fn " + f.Name + ">"
 }
 
+// ModuleRef names a compiled module and its entry function.
+type ModuleRef struct {
+	// Name is the module name used for caching and diagnostics.
+	Name string
+	// Fn runs the module body and returns an object.Module.
+	Fn *Function
+}
+
 // Program is a compiled Sprout program. Main is the entry function.
 type Program struct {
 	Main *Function
+	// Modules holds every module the program imports, in compile order.
+	Modules []*ModuleRef
 }
 
 // Builder assembles one function's bytecode.
@@ -198,10 +219,26 @@ func (b *Builder) AddU16Pair(op Opcode, a, b16 uint16, pos source.Pos) int {
 	return off
 }
 
+// AddU16Byte emits an opcode followed by a one-byte and a two-byte operand.
+func (b *Builder) AddU16Byte(op Opcode, v byte, u uint16, pos source.Pos) int {
+	off := len(b.fn.Code)
+	b.fn.Code = append(b.fn.Code, byte(op), v, byte(u>>8), byte(u))
+	b.track(off, pos)
+	return off
+}
+
 // PatchU16 overwrites the two-byte operand that starts at off.
 func (b *Builder) PatchU16(off int, v uint16) {
 	b.fn.Code[off+1] = byte(v >> 8)
 	b.fn.Code[off+2] = byte(v)
+}
+
+// PatchResult overwrites the two-byte operand of a TEST_RESULT instruction
+// that starts at off. TEST_RESULT is "opcode, flag byte, uint16 target", so
+// its operand begins two bytes in.
+func (b *Builder) PatchResult(off int, v uint16) {
+	b.fn.Code[off+2] = byte(v >> 8)
+	b.fn.Code[off+3] = byte(v)
 }
 
 // Len returns the length of the instruction stream so far.
@@ -235,13 +272,19 @@ func U16(b []byte, off int) uint16 {
 
 // disassembler walks an instruction stream and renders each instruction.
 type disassembler struct {
-	fn *Function
-	b  strings.Builder
+	fn  *Function
+	prg *Program // optional; names OpImport operands
+	b   strings.Builder
 }
 
 // Disassemble renders fn as a human-readable instruction listing.
 func Disassemble(fn *Function) string {
-	d := &disassembler{fn: fn}
+	return DisassembleProgram(fn, nil)
+}
+
+// DisassembleProgram renders fn with program context for module operands.
+func DisassembleProgram(fn *Function, prg *Program) string {
+	d := &disassembler{fn: fn, prg: prg}
 	ip := 0
 	for ip < len(fn.Code) {
 		next, ok := d.instruction(ip)
@@ -273,12 +316,32 @@ func (d *disassembler) instruction(ip int) (int, bool) {
 		idx := U16(d.fn.Code, ip+1)
 		fmt.Fprintf(&d.b, "  %d  (%s)", idx, d.fn.Consts[idx])
 		return ip + 3, true
-	case OpNewEnv, OpGetLocal, OpSetLocal, OpBuildList, OpBuildMap:
+	case OpNewEnv, OpGetLocal, OpSetLocal, OpBuildList, OpBuildMap, OpBuildStruct:
 		fmt.Fprintf(&d.b, "  %d", U16(d.fn.Code, ip+1))
 		return ip + 3, true
 	case OpGetUp, OpSetUp:
 		fmt.Fprintf(&d.b, "  depth %d slot %d", U16(d.fn.Code, ip+1), U16(d.fn.Code, ip+3))
 		return ip + 5, true
+	case OpMakeStruct:
+		idx := U16(d.fn.Code, ip+1)
+		name := "<unknown>"
+		if int(idx) < len(d.fn.Consts) {
+			if s, ok := d.fn.Consts[idx].(object.Str); ok {
+				name = s.Value
+			}
+		}
+		fmt.Fprintf(&d.b, "  %d  (%s) fields %d", idx, name, U16(d.fn.Code, ip+3))
+		return ip + 5, true
+	case OpAddMethod, OpGetMember, OpSetMember:
+		idx := U16(d.fn.Code, ip+1)
+		name := "<unknown>"
+		if int(idx) < len(d.fn.Consts) {
+			if s, ok := d.fn.Consts[idx].(object.Str); ok {
+				name = s.Value
+			}
+		}
+		fmt.Fprintf(&d.b, "  %d  (%s)", idx, name)
+		return ip + 3, true
 	case OpBuiltin:
 		idx := U16(d.fn.Code, ip+1)
 		name := "<unknown>"
@@ -295,19 +358,36 @@ func (d *disassembler) instruction(ip int) (int, bool) {
 			fmt.Fprintf(&d.b, "  %d", idx)
 		}
 		return ip + 3, true
-	case OpImport, OpExport:
-		idx := U16(d.fn.Code, ip+1)
-		name := "<unknown>"
-		if c, ok := d.fn.Consts[idx].(object.Str); ok {
-			name = strconv.Quote(c.Value)
-		}
-		fmt.Fprintf(&d.b, "  %d  %s", idx, name)
-		return ip + 3, true
 	case OpCall:
 		fmt.Fprintf(&d.b, "  %d", d.fn.Code[ip+1])
 		return ip + 2, true
 	case OpJump, OpJumpIfFalse, OpJumpIfTrue, OpIterNext:
 		fmt.Fprintf(&d.b, "  -> %04d", U16(d.fn.Code, ip+1))
+		return ip + 3, true
+	case OpTestResult:
+		flag := "ok"
+		if d.fn.Code[ip+1] == 0 {
+			flag = "err"
+		}
+		fmt.Fprintf(&d.b, "  %s -> %04d", flag, U16(d.fn.Code, ip+2))
+		return ip + 4, true
+	case OpImport:
+		idx := U16(d.fn.Code, ip+1)
+		name := "<unknown>"
+		if d.prg != nil && int(idx) < len(d.prg.Modules) {
+			name = d.prg.Modules[idx].Name
+		}
+		fmt.Fprintf(&d.b, "  %d  (%s)", idx, name)
+		return ip + 3, true
+	case OpMakeModule:
+		idx := U16(d.fn.Code, ip+1)
+		name := "<unknown>"
+		if int(idx) < len(d.fn.Consts) {
+			if s, ok := d.fn.Consts[idx].(object.Str); ok {
+				name = s.Value
+			}
+		}
+		fmt.Fprintf(&d.b, "  %d  (%s)", idx, name)
 		return ip + 3, true
 	default:
 		return ip + 1, true

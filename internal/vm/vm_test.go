@@ -300,3 +300,84 @@ add_entry("two")
 print(log)
 `, "[one, two]\n")
 }
+
+func TestVMResults(t *testing.T) {
+	expectOutput(t, `
+let r = ok(42)
+print(r)
+print(type(r))
+print(is_ok(r), is_err(r))
+print(unwrap(r))
+print(unwrap_or(err("x"), 7))
+`, "ok(42)\nresult\ntrue false\n42\n7\n")
+
+	expectError(t, `print(unwrap(err("oops")))`, "oops")
+	expectError(t, `print(unwrap(5))`, "expects a result")
+}
+
+func TestVMMatch(t *testing.T) {
+	expectOutput(t, `
+fn classify(n) {
+    return match n {
+        0 => { "zero" },
+        1 => { "one" },
+        _ => { "many" },
+    }
+}
+print(classify(0), classify(1), classify(9))
+`, "zero one many\n")
+
+	expectOutput(t, `
+let r = ok(7)
+print(match r {
+    ok(v) => { v * 2 },
+    err(e) => { 0 },
+    _ => { -1 },
+})
+let e = err("boom")
+print(match e {
+    ok(v) => { v },
+    err(m) => { "failed: " + m },
+    _ => { "?" },
+})
+`, "14\nfailed: boom\n")
+
+	expectOutput(t, `
+let total = 0
+for i in range(0, 4) {
+    total = total + match i {
+        0 => { 10 },
+        2 => { 20 },
+        _ => { i },
+    }
+}
+print(total)
+`, "34\n")
+
+	expectOutput(t, `
+let nested = ok(err("deep"))
+print(match nested {
+    ok(err(m)) => { "nested: " + m },
+    ok(v) => { "shallow" },
+    err(m) => { m },
+    _ => { "?" },
+})
+let good = ok(ok(5))
+print(match good {
+    ok(ok(x)) => { x },
+    _ => { 0 },
+})
+`, "nested: deep\n5\n")
+
+	expectOutput(t, `
+let x = 42
+print(match x {
+    v => { v + 1 },
+})
+print(match 2.5 {
+    2 => { "int" },
+    2.5 => { "float" },
+    _ => { "other" },
+})
+`, "43\nfloat\n")
+}

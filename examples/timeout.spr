@@ -1,0 +1,10 @@
+let gate = channel()
+let worker = spawn(fn() {
+    recv(gate)
+    return "ready"
+})
+
+print(unwrap_or(await(worker, 1), "timed out"))
+cancel(worker)
+print(unwrap_or(await(worker), "cancelled"))
+close(gate)

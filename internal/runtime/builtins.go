@@ -15,6 +15,7 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/sprout-lang/sprout/internal/object"
@@ -515,6 +516,26 @@ func builtinAssert(ctx *Context, args []object.Object, pos source.Pos) (object.O
 	return nil, FmtErr("assertion failed")
 }
 
+// builtinModule wraps a map into a module value.
+//
+// The build tool uses it to construct modules inside a bundle. Programs can
+// use it to create module values dynamically.
+func builtinModule(ctx *Context, args []object.Object, pos source.Pos) (object.Object, error) {
+	name, ok := args[0].(object.Str)
+	if !ok {
+		return nil, FmtErr("module() name must be a string, got %s", args[0].Type())
+	}
+	m, ok := args[1].(*object.Map)
+	if !ok {
+		return nil, FmtErr("module() exports must be a map, got %s", args[1].Type())
+	}
+	exports := make(map[string]object.Object, len(m.Keys))
+	for _, k := range m.Keys {
+		exports[k] = m.Vals[k]
+	}
+	return &object.Module{Name: name.Value, Exports: exports}, nil
+}
+
 func writeLine(w io.Writer, s string) {
 	if w == nil {
 		return
@@ -527,4 +548,202 @@ func writeString(w io.Writer, s string) {
 		return
 	}
 	_, _ = fmt.Fprint(w, s)
+}
+
+// builtinOk wraps a value in an ok result.
+func builtinOk(ctx *Context, args []object.Object, pos source.Pos) (object.Object, error) {
+	return object.Result{Ok: true, Value: args[0]}, nil
+}
+
+// builtinErr wraps a message in an error result.
+func builtinErr(ctx *Context, args []object.Object, pos source.Pos) (object.Object, error) {
+	msg, ok := args[0].(object.Str)
+	if !ok {
+		return nil, FmtErr("err() expects a string message, got %s", args[0].Type())
+	}
+	return object.Result{Ok: false, Message: msg.Value}, nil
+}
+
+// builtinIsOk reports whether a value is an ok result.
+func builtinIsOk(ctx *Context, args []object.Object, pos source.Pos) (object.Object, error) {
+	return object.Bool{Value: IsOk(args[0])}, nil
+}
+
+// builtinIsErr reports whether a value is an error result.
+func builtinIsErr(ctx *Context, args []object.Object, pos source.Pos) (object.Object, error) {
+	_, isResult := args[0].(object.Result)
+	return object.Bool{Value: isResult && !IsOk(args[0])}, nil
+}
+
+// builtinUnwrap returns the value of an ok result and fails on an error.
+func builtinUnwrap(ctx *Context, args []object.Object, pos source.Pos) (object.Object, error) {
+	return Unwrap(args[0])
+}
+
+// builtinUnwrapOr returns the value of an ok result, or a fallback value.
+func builtinUnwrapOr(ctx *Context, args []object.Object, pos source.Pos) (object.Object, error) {
+	return UnwrapOr(args[0], args[1])
+}
+
+// builtinChannel creates a blocking channel or a buffered channel.
+func builtinChannel(ctx *Context, args []object.Object, pos source.Pos) (object.Object, error) {
+	capacity := int64(0)
+	if len(args) == 1 {
+		var ok bool
+		capacity, ok = AsIntIndex(args[0])
+		if !ok {
+			return nil, FmtErr("channel() capacity must be an integer, got %s", args[0].Type())
+		}
+		if capacity < 0 {
+			return nil, FmtErr("channel() capacity cannot be negative")
+		}
+	}
+	return object.NewChannel(int(capacity)), nil
+}
+
+// builtinSend sends a value and blocks until a receiver accepts it.
+func builtinSend(ctx *Context, args []object.Object, pos source.Pos) (object.Object, error) {
+	ch, ok := args[0].(*object.Channel)
+	if !ok {
+		return nil, FmtErr("send() expects a channel, got %s", args[0].Type())
+	}
+	if err := ch.SendContext(ctx.Done, args[1]); err != nil {
+		return nil, err
+	}
+	return object.NilValue, nil
+}
+
+// builtinRecv receives a value as an ok result. A closed channel returns an
+// error result so callers can handle shutdown without a runtime exception.
+func builtinRecv(ctx *Context, args []object.Object, pos source.Pos) (object.Object, error) {
+	ch, ok := args[0].(*object.Channel)
+	if !ok {
+		return nil, FmtErr("recv() expects a channel, got %s", args[0].Type())
+	}
+	value, open, err := ch.ReceiveContext(ctx.Done)
+	if err != nil {
+		return object.Result{Ok: false, Message: err.Error()}, nil
+	}
+	if !open {
+		return object.Result{Ok: false, Message: "channel closed"}, nil
+	}
+	return object.Result{Ok: true, Value: value}, nil
+}
+
+// builtinSelect waits for a value from one of the channels in a list.
+// It returns ok({"index": i, "value": value}), or an error result when
+// every channel closes or the current task is cancelled.
+func builtinSelect(ctx *Context, args []object.Object, pos source.Pos) (object.Object, error) {
+	list, ok := args[0].(*object.List)
+	if !ok {
+		return nil, FmtErr("select() expects a list of channels, got %s", args[0].Type())
+	}
+	channels := make([]*object.Channel, len(list.Elems))
+	for i, value := range list.Elems {
+		channel, ok := value.(*object.Channel)
+		if !ok {
+			return nil, FmtErr("select() item %d must be a channel, got %s", i, value.Type())
+		}
+		channels[i] = channel
+	}
+	index, value, open, err := object.SelectReceive(channels, ctx.Done)
+	if err != nil {
+		if err == object.ErrCancelled {
+			return object.Result{Ok: false, Message: err.Error()}, nil
+		}
+		return nil, err
+	}
+	if !open {
+		return object.Result{Ok: false, Message: "all channels closed"}, nil
+	}
+	selection := &object.Map{Vals: make(map[string]object.Object)}
+	selection.Set("index", object.Int{Value: int64(index)})
+	selection.Set("value", value)
+	return object.Result{Ok: true, Value: selection}, nil
+}
+
+// builtinClose closes a channel and wakes blocked receivers.
+func builtinClose(ctx *Context, args []object.Object, pos source.Pos) (object.Object, error) {
+	ch, ok := args[0].(*object.Channel)
+	if !ok {
+		return nil, FmtErr("close() expects a channel, got %s", args[0].Type())
+	}
+	if err := ch.Close(); err != nil {
+		return nil, err
+	}
+	return object.NilValue, nil
+}
+
+// builtinSpawn starts a zero-argument function in the engine's child context.
+func builtinSpawn(ctx *Context, args []object.Object, pos source.Pos) (object.Object, error) {
+	if ctx.Spawn == nil {
+		return nil, FmtErr("spawn() is unavailable in this execution mode")
+	}
+	return ctx.Spawn(args[0], nil, pos)
+}
+
+// builtinAwait waits for a task and wraps its result in Result. An optional
+// timeout bounds the wait in milliseconds without cancelling the task.
+func builtinAwait(ctx *Context, args []object.Object, pos source.Pos) (object.Object, error) {
+	task, ok := args[0].(*object.Task)
+	if !ok {
+		return nil, FmtErr("await() expects a task, got %s", args[0].Type())
+	}
+	var done <-chan struct{}
+	if ctx != nil {
+		done = ctx.Done
+	}
+	var value object.Object
+	var err error
+	if len(args) == 1 {
+		value, err = task.AwaitContext(done)
+	} else {
+		milliseconds, ok := AsIntIndex(args[1])
+		if !ok {
+			return nil, FmtErr("await() timeout must be an integer, got %s", args[1].Type())
+		}
+		if err := validateTimeoutMilliseconds(milliseconds); err != nil {
+			return nil, err
+		}
+		value, err = task.AwaitContextWithTimeout(done, time.Duration(milliseconds)*time.Millisecond)
+	}
+	if err != nil {
+		return object.Result{Ok: false, Message: err.Error()}, nil
+	}
+	return object.Result{Ok: true, Value: value}, nil
+}
+
+// builtinCancel requests cooperative cancellation for a task.
+func builtinCancel(ctx *Context, args []object.Object, pos source.Pos) (object.Object, error) {
+	task, ok := args[0].(*object.Task)
+	if !ok {
+		return nil, FmtErr("cancel() expects a task, got %s", args[0].Type())
+	}
+	task.Cancel()
+	return object.NilValue, nil
+}
+
+// builtinIsCancelled reports whether the current task received cancellation.
+func builtinIsCancelled(ctx *Context, args []object.Object, pos source.Pos) (object.Object, error) {
+	return object.Bool{Value: ctx.Cancelled()}, nil
+}
+
+// builtinYield gives another task a scheduling opportunity.
+func builtinYield(ctx *Context, args []object.Object, pos source.Pos) (object.Object, error) {
+	if err := schedulerYield(ctx); err != nil {
+		return nil, err
+	}
+	return object.NilValue, nil
+}
+
+// builtinSleep pauses the current task for milliseconds.
+func builtinSleep(ctx *Context, args []object.Object, pos source.Pos) (object.Object, error) {
+	milliseconds, ok := AsIntIndex(args[0])
+	if !ok {
+		return nil, FmtErr("sleep() duration must be an integer, got %s", args[0].Type())
+	}
+	if err := schedulerSleep(ctx, milliseconds); err != nil {
+		return nil, err
+	}
+	return object.NilValue, nil
 }

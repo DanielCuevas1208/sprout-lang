@@ -1,0 +1,10 @@
+result: 7
+failed: division by zero
+is_ok: true is_err: false
+unwrap: 7
+unwrap_or: -1
+zero
+one
+the number 42
+sum of steps: 8
+nested error: deep

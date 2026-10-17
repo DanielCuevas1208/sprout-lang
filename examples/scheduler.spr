@@ -1,0 +1,14 @@
+// Scheduler controls let a task yield or pause without stopping its peers.
+let events = channel(1)
+let worker = spawn(fn() {
+    send(events, "started")
+    yield()
+    sleep(1)
+    send(events, "finished")
+    return "done"
+})
+
+print(unwrap(recv(events)))
+print(unwrap(recv(events)))
+print(unwrap(await(worker)))
+close(events)

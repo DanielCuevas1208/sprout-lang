@@ -42,8 +42,12 @@ const (
 	IMPORT
 	EXPORT
 	AS
+	STRUCT
+	INTERFACE
+	MATCH
 
 	// Operators and punctuation.
+	ARROW    // =>
 	ASSIGN   // =
 	EQ       // ==
 	NEQ      // !=
@@ -65,30 +69,34 @@ const (
 	RBRACE   // }
 	COMMA    // ,
 	COLON    // :
+	DOT      // .
 )
 
 var keywords = map[string]Kind{
-	"let":      LET,
-	"const":    CONST,
-	"fn":       FN,
-	"if":       IF,
-	"elif":     ELIF,
-	"else":     ELSE,
-	"for":      FOR,
-	"in":       IN,
-	"while":    WHILE,
-	"return":   RETURN,
-	"break":    BREAK,
-	"continue": CONTINUE,
-	"true":     TRUE,
-	"false":    FALSE,
-	"nil":      NIL,
-	"and":      AND,
-	"or":       OR,
-	"not":      NOT,
-	"import":   IMPORT,
-	"export":   EXPORT,
-	"as":       AS,
+	"let":       LET,
+	"const":     CONST,
+	"fn":        FN,
+	"if":        IF,
+	"elif":      ELIF,
+	"else":      ELSE,
+	"for":       FOR,
+	"in":        IN,
+	"while":     WHILE,
+	"return":    RETURN,
+	"break":     BREAK,
+	"continue":  CONTINUE,
+	"true":      TRUE,
+	"false":     FALSE,
+	"nil":       NIL,
+	"and":       AND,
+	"or":        OR,
+	"not":       NOT,
+	"import":    IMPORT,
+	"export":    EXPORT,
+	"as":        AS,
+	"struct":    STRUCT,
+	"interface": INTERFACE,
+	"match":     MATCH,
 }
 
 // Lookup returns the keyword kind for name, or IDENT.
@@ -166,6 +174,14 @@ func (k Kind) String() string {
 		return "export"
 	case AS:
 		return "as"
+	case STRUCT:
+		return "struct"
+	case INTERFACE:
+		return "interface"
+	case MATCH:
+		return "match"
+	case ARROW:
+		return "=>"
 	case ASSIGN:
 		return "="
 	case EQ:
@@ -208,6 +224,8 @@ func (k Kind) String() string {
 		return ","
 	case COLON:
 		return ":"
+	case DOT:
+		return "."
 	}
 	return fmt.Sprintf("token(%d)", int(k))
 }

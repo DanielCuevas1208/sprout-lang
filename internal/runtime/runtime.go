@@ -8,6 +8,7 @@
 // An engine provides a Context with its streams and a Call hook. The Call
 // hook runs a function value with a set of arguments. Engines use the hook
 // to call user functions from higher-order builtins such as map and fold.
+// The context can also carry a scheduler for task controls.
 package runtime
 
 import (
@@ -34,6 +35,30 @@ type Context struct {
 	// Call invokes fn with args. Engines use it to call user functions.
 	// The hook reports an error by panicking with the engine's signal.
 	Call func(fn object.Object, args []object.Object, pos source.Pos) object.Object
+
+	// Done closes when the current task receives a cancellation request.
+	Done <-chan struct{}
+
+	// Scheduler controls yield() and sleep(). Engines share it with child
+	// contexts so one policy applies to the whole task tree.
+	Scheduler Scheduler
+
+	// Spawn starts fn in a separate execution context. The hook returns a task
+	// handle so the spawn builtin stays independent of either engine.
+	Spawn func(fn object.Object, args []object.Object, pos source.Pos) (*object.Task, error)
+}
+
+// Cancelled reports whether the current task received a cancellation request.
+func (c *Context) Cancelled() bool {
+	if c == nil || c.Done == nil {
+		return false
+	}
+	select {
+	case <-c.Done:
+		return true
+	default:
+		return false
+	}
 }
 
 // Builtin is one standard library function.
@@ -102,6 +127,24 @@ var Builtins = []*Builtin{
 	{Name: "round", MinArgs: 1, MaxArgs: 1, Fn: builtinRound},
 	{Name: "sqrt", MinArgs: 1, MaxArgs: 1, Fn: builtinSqrt},
 	{Name: "assert", MinArgs: 1, MaxArgs: 2, Fn: builtinAssert},
+	{Name: "module", MinArgs: 2, MaxArgs: 2, Fn: builtinModule},
+	{Name: "ok", MinArgs: 1, MaxArgs: 1, Fn: builtinOk},
+	{Name: "err", MinArgs: 1, MaxArgs: 1, Fn: builtinErr},
+	{Name: "is_ok", MinArgs: 1, MaxArgs: 1, Fn: builtinIsOk},
+	{Name: "is_err", MinArgs: 1, MaxArgs: 1, Fn: builtinIsErr},
+	{Name: "unwrap", MinArgs: 1, MaxArgs: 1, Fn: builtinUnwrap},
+	{Name: "unwrap_or", MinArgs: 2, MaxArgs: 2, Fn: builtinUnwrapOr},
+	{Name: "channel", MinArgs: 0, MaxArgs: 1, Fn: builtinChannel},
+	{Name: "select", MinArgs: 1, MaxArgs: 1, Fn: builtinSelect},
+	{Name: "send", MinArgs: 2, MaxArgs: 2, Fn: builtinSend},
+	{Name: "recv", MinArgs: 1, MaxArgs: 1, Fn: builtinRecv},
+	{Name: "close", MinArgs: 1, MaxArgs: 1, Fn: builtinClose},
+	{Name: "spawn", MinArgs: 1, MaxArgs: 1, Fn: builtinSpawn},
+	{Name: "await", MinArgs: 1, MaxArgs: 2, Fn: builtinAwait},
+	{Name: "cancel", MinArgs: 1, MaxArgs: 1, Fn: builtinCancel},
+	{Name: "is_cancelled", MinArgs: 0, MaxArgs: 0, Fn: builtinIsCancelled},
+	{Name: "yield", MinArgs: 0, MaxArgs: 0, Fn: builtinYield},
+	{Name: "sleep", MinArgs: 1, MaxArgs: 1, Fn: builtinSleep},
 }
 
 // Names lists the standard library function names.
@@ -195,6 +238,15 @@ func Equal(a, b object.Object) bool {
 			}
 		}
 		return true
+	case object.Result:
+		y := b.(object.Result)
+		if x.Ok != y.Ok {
+			return false
+		}
+		if x.Ok {
+			return Equal(x.Value, y.Value)
+		}
+		return x.Message == y.Message
 	case object.Object:
 		return a == b
 	}
@@ -238,6 +290,53 @@ func AsIntIndex(o object.Object) (int64, bool) {
 		return v.Value, true
 	}
 	return 0, false
+}
+
+// IsOk reports whether o is an ok result.
+func IsOk(o object.Object) bool {
+	if r, ok := o.(object.Result); ok {
+		return r.Ok
+	}
+	return false
+}
+
+// ResultValue returns the value of an ok result, or the message of an error
+// result. It reports whether o is a result at all.
+func ResultValue(o object.Object) (object.Object, bool) {
+	if r, ok := o.(object.Result); ok {
+		if r.Ok {
+			return r.Value, true
+		}
+		return object.Str{Value: r.Message}, true
+	}
+	return nil, false
+}
+
+// Unwrap returns the value of an ok result, or an error for an error result.
+//
+// The error carries the result's message so a failed unwrap reads like a
+// runtime error in the source language.
+func Unwrap(o object.Object) (object.Object, error) {
+	r, ok := o.(object.Result)
+	if !ok {
+		return nil, FmtErr("unwrap() expects a result, got %s", o.Type())
+	}
+	if !r.Ok {
+		return nil, FmtErr("%s", r.Message)
+	}
+	return r.Value, nil
+}
+
+// UnwrapOr returns the value of an ok result, or def for an error result.
+func UnwrapOr(o object.Object, def object.Object) (object.Object, error) {
+	r, ok := o.(object.Result)
+	if !ok {
+		return nil, FmtErr("unwrap_or() expects a result, got %s", o.Type())
+	}
+	if !r.Ok {
+		return def, nil
+	}
+	return r.Value, nil
 }
 
 func isFloat(o object.Object) bool {
@@ -446,7 +545,7 @@ func IndexGet(container, idx object.Object) (object.Object, error) {
 	case *object.Module:
 		ks, ok := idx.(object.Str)
 		if !ok {
-			return nil, FmtErr("module key must be a string")
+			return nil, FmtErr("module member must be a string")
 		}
 		if v, exists := c.Exports[ks.Value]; exists {
 			return v, nil
@@ -454,6 +553,52 @@ func IndexGet(container, idx object.Object) (object.Object, error) {
 		return object.NilValue, nil
 	}
 	return nil, FmtErr("cannot index a %s", container.Type())
+}
+
+// GetMember reads a named member of a struct or a module.
+//
+// A field returns its value. A method returns a bound method value. A
+// module member returns the exported value. Any other value is an error.
+func GetMember(x object.Object, name string) (object.Object, error) {
+	switch v := x.(type) {
+	case *object.Struct:
+		if field, ok := v.Values[name]; ok {
+			return field, nil
+		}
+		if method, ok := v.StructType.Methods[name]; ok {
+			return &object.BoundMethod{Name: name, Receiver: v, Method: method}, nil
+		}
+		// A declared but unset field holds nil.
+		if v.StructType.HasField(name) {
+			return object.NilValue, nil
+		}
+		return nil, FmtErr("type '%s' has no field or method '%s'", v.StructType.Name, name)
+	case *object.Module:
+		if exported, ok := v.Exports[name]; ok {
+			return exported, nil
+		}
+		return nil, FmtErr("module '%s' has no exported member '%s'", v.Name, name)
+	}
+	return nil, FmtErr("cannot access a member of a %s", x.Type())
+}
+
+// SetMember stores value into a field of a struct and returns value.
+//
+// A missing field and a method name are both errors. Modules are read-only
+// to importers.
+func SetMember(x object.Object, name string, value object.Object) (object.Object, error) {
+	s, ok := x.(*object.Struct)
+	if !ok {
+		return nil, FmtErr("cannot assign to a member of a %s", x.Type())
+	}
+	if !s.StructType.HasField(name) {
+		return nil, FmtErr("type '%s' has no field '%s'", s.StructType.Name, name)
+	}
+	if s.StructType.HasMethod(name) {
+		return nil, FmtErr("cannot assign to method '%s' of type '%s'", name, s.StructType.Name)
+	}
+	s.Values[name] = value
+	return value, nil
 }
 
 // SetIndex stores value into a container and returns value.
@@ -476,6 +621,8 @@ func SetIndex(container, idx, value object.Object) (object.Object, error) {
 		}
 		c.Set(ks.Value, value)
 		return value, nil
+	case *object.Module:
+		return nil, FmtErr("cannot assign to a member of module '%s'", c.Name)
 	}
 	return nil, FmtErr("cannot assign to an index of a %s", container.Type())
 }

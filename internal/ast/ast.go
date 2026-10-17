@@ -72,9 +72,11 @@ func (p *Param) End() source.Pos {
 }
 
 // LetStmt declares a variable (IsConst == false) or a constant.
+// Export marks the name as visible to importers of the file.
 type LetStmt struct {
 	KwPos   source.Pos
 	IsConst bool
+	Export  bool
 	Name    *Ident
 	Type    *Ident // optional type annotation
 	Value   Expr
@@ -93,11 +95,17 @@ func (s *LetStmt) End() source.Pos {
 func (*LetStmt) stmt() {}
 
 // FnStmt declares a named function.
+//
+// A receiver names the struct that a method binds to. A method has an
+// implicit first parameter called self. Export marks the name as visible to
+// importers of the file.
 type FnStmt struct {
-	FnPos  source.Pos
-	Name   *Ident
-	Params []*Param
-	Body   *Block
+	FnPos    source.Pos
+	Export   bool
+	Receiver *Ident // optional struct receiver for a method
+	Name     *Ident
+	Params   []*Param
+	Body     *Block
 }
 
 func (s *FnStmt) Pos() source.Pos { return s.FnPos }
@@ -109,34 +117,66 @@ func (s *FnStmt) End() source.Pos {
 }
 func (*FnStmt) stmt() {}
 
-// ImportStmt loads a module and binds it to a name.
+// StructStmt declares a named struct type.
 //
-// The module runs once, in its own scope. Only its exported names are
-// visible through the module value.
-type ImportStmt struct {
-	ImportPos source.Pos
-	// Path is the module path as written in the source.
-	Path string
-	// Alias is the name bound to the loaded module.
-	Alias string
+// The body lists field names. Fields have no static type; each holds any
+// value. Export marks the type as visible to importers of the file.
+type StructStmt struct {
+	StructPos source.Pos
+	Export    bool
+	Name      *Ident
+	Fields    []*Ident
 }
 
-func (s *ImportStmt) Pos() source.Pos { return s.ImportPos }
-func (s *ImportStmt) End() source.Pos {
-	return source.Pos{Line: s.ImportPos.Line, Column: s.ImportPos.Column + len(s.Path)}
+func (s *StructStmt) Pos() source.Pos { return s.StructPos }
+func (s *StructStmt) End() source.Pos {
+	if len(s.Fields) > 0 {
+		return s.Fields[len(s.Fields)-1].End()
+	}
+	if s.Name != nil {
+		return s.Name.End()
+	}
+	return s.StructPos
 }
-func (*ImportStmt) stmt() {}
+func (*StructStmt) stmt() {}
 
-// ExportStmt marks a top-level declaration as visible to importers.
-type ExportStmt struct {
-	ExportPos source.Pos
-	// Decl is the wrapped declaration: a LetStmt, or an FnStmt.
-	Decl Stmt
+// InterfaceStmt declares a named interface.
+//
+// An interface lists the methods a struct must provide to satisfy it. A
+// struct satisfies an interface when it declares every listed method with
+// the same arity. Interfaces are a static contract; they carry no runtime
+// value.
+type InterfaceStmt struct {
+	InterfacePos source.Pos
+	Name         *Ident
+	Methods      []*InterfaceMethod
 }
 
-func (s *ExportStmt) Pos() source.Pos { return s.ExportPos }
-func (s *ExportStmt) End() source.Pos { return s.Decl.End() }
-func (*ExportStmt) stmt()             {}
+func (s *InterfaceStmt) Pos() source.Pos { return s.InterfacePos }
+func (s *InterfaceStmt) End() source.Pos {
+	if len(s.Methods) > 0 {
+		return s.Methods[len(s.Methods)-1].End()
+	}
+	if s.Name != nil {
+		return s.Name.End()
+	}
+	return s.InterfacePos
+}
+func (*InterfaceStmt) stmt() {}
+
+// InterfaceMethod is one method signature inside an interface.
+type InterfaceMethod struct {
+	Name   *Ident
+	Params []*Param
+}
+
+func (m *InterfaceMethod) Pos() source.Pos { return m.Name.Position }
+func (m *InterfaceMethod) End() source.Pos {
+	if len(m.Params) > 0 {
+		return m.Params[len(m.Params)-1].End()
+	}
+	return m.Name.End()
+}
 
 // Block is a sequence of statements between braces.
 type Block struct {
@@ -361,10 +401,21 @@ func (n *AssignExpr) End() source.Pos { return n.Value.End() }
 func (*AssignExpr) expr()             {}
 
 // CallExpr invokes a function with arguments.
+//
+// Named arguments build a struct instance from its type: the callee names a
+// struct type and each Named entry names one field. A call uses either
+// positional or named arguments, never both.
 type CallExpr struct {
 	Callee Expr
 	Lparen source.Pos
 	Args   []Expr
+	Named  []NamedArg
+}
+
+// NamedArg is one "name: value" argument in a struct literal call.
+type NamedArg struct {
+	Name  *Ident
+	Value Expr
 }
 
 func (n *CallExpr) Pos() source.Pos {
@@ -373,8 +424,49 @@ func (n *CallExpr) Pos() source.Pos {
 	}
 	return n.Lparen
 }
-func (n *CallExpr) End() source.Pos { return n.Lparen }
-func (*CallExpr) expr()             {}
+func (n *CallExpr) End() source.Pos {
+	if len(n.Named) > 0 {
+		return n.Named[len(n.Named)-1].Value.End()
+	}
+	if len(n.Args) > 0 {
+		return n.Args[len(n.Args)-1].End()
+	}
+	return n.Lparen
+}
+func (*CallExpr) expr() {}
+
+// ImportStmt loads a module and binds it to a local name.
+type ImportStmt struct {
+	ImportPos source.Pos
+	// Path is the module specifier, for example "lib/util" or "./util.spr".
+	Path    string
+	PathPos source.Pos
+	// Name is the name the module is bound to in the importing scope.
+	Name *Ident
+}
+
+func (s *ImportStmt) Pos() source.Pos { return s.ImportPos }
+func (s *ImportStmt) End() source.Pos {
+	if s.Name != nil {
+		return s.Name.End()
+	}
+	return s.ImportPos
+}
+func (*ImportStmt) stmt() {}
+
+// MemberExpr reads a named member of a module value.
+//
+// The member is stored in the AST as a name so the checker can validate it
+// against the module's export table without re-tokenizing the source.
+type MemberExpr struct {
+	X      Expr
+	DotPos source.Pos
+	Name   *Ident
+}
+
+func (n *MemberExpr) Pos() source.Pos { return n.X.Pos() }
+func (n *MemberExpr) End() source.Pos { return n.Name.End() }
+func (*MemberExpr) expr()             {}
 
 // IndexExpr reads an element from a container.
 type IndexExpr struct {
@@ -403,6 +495,85 @@ func (n *FnExpr) Pos() source.Pos { return n.FnPos }
 func (n *FnExpr) End() source.Pos { return n.Body.End() }
 func (*FnExpr) expr()             {}
 
+// MatchExpr is a pattern-matching expression.
+//
+// A match evaluates its subject once, then tries each arm in order. The
+// first arm whose pattern matches runs; its body value is the match value.
+// Pattern variables bind inside the arm's block scope.
+type MatchExpr struct {
+	MatchPos source.Pos
+	Subject  Expr
+	Arms     []*MatchArm
+}
+
+func (n *MatchExpr) Pos() source.Pos { return n.MatchPos }
+func (n *MatchExpr) End() source.Pos {
+	if len(n.Arms) > 0 {
+		return n.Arms[len(n.Arms)-1].End()
+	}
+	return n.MatchPos
+}
+func (*MatchExpr) expr() {}
+
+// MatchArm is one "pattern => block" clause of a match.
+type MatchArm struct {
+	Pattern Pattern
+	Body    *Block
+}
+
+func (a *MatchArm) Pos() source.Pos { return a.Pattern.Pos() }
+func (a *MatchArm) End() source.Pos { return a.Body.End() }
+
+// Pattern is one match pattern.
+type Pattern interface {
+	Node
+	pattern()
+}
+
+// WildcardPattern matches any value and binds nothing. It is the catch-all
+// pattern written as "_".
+type WildcardPattern struct {
+	Position source.Pos
+}
+
+func (p *WildcardPattern) Pos() source.Pos { return p.Position }
+func (p *WildcardPattern) End() source.Pos { return p.Position }
+func (*WildcardPattern) pattern()          {}
+
+// VarPattern binds a name to the matched value.
+type VarPattern struct {
+	Ident *Ident
+}
+
+func (p *VarPattern) Pos() source.Pos { return p.Ident.Position }
+func (p *VarPattern) End() source.Pos { return p.Ident.End() }
+func (*VarPattern) pattern()          {}
+
+// LitPattern matches a value equal to a literal.
+//
+// The value is one of IntLit, FloatLit, StrLit, BoolLit, or NilLit.
+type LitPattern struct {
+	Value Expr
+}
+
+func (p *LitPattern) Pos() source.Pos { return p.Value.Pos() }
+func (p *LitPattern) End() source.Pos { return p.Value.End() }
+func (*LitPattern) pattern()          {}
+
+// ResultPattern matches an ok or err result and destructures it.
+//
+// IsOk reports which variant the pattern matches. Inner is the pattern that
+// tests the carried value or message.
+type ResultPattern struct {
+	Position source.Pos
+	IsOk     bool
+	Inner    Pattern
+}
+
+func (p *ResultPattern) Pos() source.Pos { return p.Position }
+func (p *ResultPattern) End() source.Pos { return p.Inner.End() }
+func (*ResultPattern) pattern()          {}
+
 // Sexp renders a node as an S-expression.
 //
 // The format is used by the "sprout parse" command and by parser tests.
@@ -430,6 +601,9 @@ func (p *printer) node(n Node) {
 		if v.IsConst {
 			kw = "const"
 		}
+		if v.Export {
+			kw = "export " + kw
+		}
 		p.group(kw, func() {
 			p.name(v.Name)
 			if v.Type != nil {
@@ -438,16 +612,32 @@ func (p *printer) node(n Node) {
 			p.exprField("value", v.Value)
 		})
 	case *FnStmt:
-		p.group("fn "+v.Name.Name, func() {
+		head := "fn " + v.Name.Name
+		if v.Receiver != nil {
+			head = "method " + v.Receiver.Name + "." + v.Name.Name
+		} else if v.Export {
+			head = "export " + head
+		}
+		p.group(head, func() {
 			p.params(v.Params)
 			p.block(v.Body)
 		})
-	case *ImportStmt:
-		p.group("import "+v.Alias, func() {
-			p.atom(strconv.Quote(v.Path))
+	case *StructStmt:
+		head := "struct " + v.Name.Name
+		if v.Export {
+			head = "export " + head
+		}
+		p.group(head, func() {
+			for _, f := range v.Fields {
+				p.field(f.Name)
+			}
 		})
-	case *ExportStmt:
-		p.group("export", func() { p.node(v.Decl) })
+	case *InterfaceStmt:
+		p.group("interface "+v.Name.Name, func() {
+			for _, m := range v.Methods {
+				p.field(m.Name.Name + ":" + strconv.Itoa(len(m.Params)))
+			}
+		})
 	case *IfStmt:
 		p.group("if", func() {
 			p.exprField("cond", v.Cond)
@@ -475,6 +665,13 @@ func (p *printer) node(n Node) {
 		})
 	case *ReturnStmt:
 		p.group("return", func() { p.exprField("value", v.Value) })
+	case *ImportStmt:
+		p.group("import", func() {
+			p.field(strconv.Quote(v.Path))
+			if v.Name != nil {
+				p.field("as " + v.Name.Name)
+			}
+		})
 	case *BreakStmt:
 		p.group("break", nil)
 	case *ContinueStmt:
@@ -532,17 +729,49 @@ func (p *printer) node(n Node) {
 			for _, a := range v.Args {
 				p.node(a)
 			}
+			for _, na := range v.Named {
+				p.group("named "+na.Name.Name, func() {
+					p.node(na.Value)
+				})
+			}
 		})
 	case *IndexExpr:
 		p.group("index", func() {
 			p.node(v.X)
 			p.node(v.Index)
 		})
+	case *MemberExpr:
+		p.group("member", func() {
+			p.node(v.X)
+			p.field("." + v.Name.Name)
+		})
 	case *FnExpr:
 		p.group("fn", func() {
 			p.params(v.Params)
 			p.block(v.Body)
 		})
+	case *MatchExpr:
+		p.group("match", func() {
+			p.exprField("subject", v.Subject)
+			for _, arm := range v.Arms {
+				p.group("arm", func() {
+					p.pattern(arm.Pattern)
+					p.block(arm.Body)
+				})
+			}
+		})
+	case *WildcardPattern:
+		p.atom("_")
+	case *VarPattern:
+		p.atom(v.Ident.Name)
+	case *LitPattern:
+		p.node(v.Value)
+	case *ResultPattern:
+		if v.IsOk {
+			p.group("ok", func() { p.pattern(v.Inner) })
+		} else {
+			p.group("err", func() { p.pattern(v.Inner) })
+		}
 	default:
 		p.atom("?")
 	}
@@ -632,6 +861,15 @@ func (p *printer) block(b *Block) {
 	p.close()
 }
 
+// pattern renders one match pattern node.
+func (p *printer) pattern(pat Pattern) {
+	if pat == nil {
+		p.atom("(nothing)")
+		return
+	}
+	p.node(pat)
+}
+
 func spaces(n int) []byte {
 	s := make([]byte, n)
 	for i := range s {
@@ -640,6 +878,14 @@ func spaces(n int) []byte {
 	return s
 }
 
+// formatFloat renders f as a Sprout float literal.
+//
+// A value like 1.0 must keep a decimal point or exponent so that re-parsing
+// yields a float, not an integer. The lexer reads "1" as an integer.
 func formatFloat(f float64) string {
-	return strconv.FormatFloat(f, 'g', -1, 64)
+	s := strconv.FormatFloat(f, 'g', -1, 64)
+	if !strings.ContainsAny(s, ".eE") {
+		s += ".0"
+	}
+	return s
 }

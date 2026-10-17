@@ -1,0 +1,12 @@
+let first = channel()
+let second = channel(1)
+let worker = spawn(fn() {
+    send(second, "second")
+    return "sent"
+})
+let event = unwrap(select([first, second]))
+print(event["index"], event["value"])
+print(unwrap(await(worker)))
+close(first)
+close(second)
+print(unwrap_or(select([first, second]), "all closed"))

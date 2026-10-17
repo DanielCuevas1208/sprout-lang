@@ -16,8 +16,6 @@ func TestOpcodeNames(t *testing.T) {
 		OpReturnValue: "RETURN_VALUE",
 		OpJumpIfFalse: "JUMP_IF_FALSE",
 		OpGe:          "GE",
-		OpImport:      "IMPORT",
-		OpExport:      "EXPORT",
 	}
 	for op, want := range names {
 		if op.String() != want {
@@ -129,20 +127,82 @@ func TestDisassemble(t *testing.T) {
 	}
 }
 
-func TestDisassembleModuleOps(t *testing.T) {
+func TestStructOpcodeNames(t *testing.T) {
+	for _, c := range []struct {
+		op   Opcode
+		want string
+	}{
+		{OpMakeStruct, "MAKE_STRUCT"},
+		{OpAddMethod, "ADD_METHOD"},
+		{OpGetMember, "GET_MEMBER"},
+		{OpSetMember, "SET_MEMBER"},
+		{OpBuildStruct, "BUILD_STRUCT"},
+		{OpTestResult, "TEST_RESULT"},
+	} {
+		if got := c.op.String(); got != c.want {
+			t.Errorf("opcode: got %q, want %q", got, c.want)
+		}
+	}
+}
+
+func TestBuilderAddU16ByteAndPatchResult(t *testing.T) {
 	b := NewBuilder("main", "test.spr", nil)
-	path := b.Const(object.Str{Value: "lib/math"})
-	name := b.Const(object.Str{Value: "square"})
-	b.AddU16(OpImport, path, pos())
-	b.AddU16(OpExport, name, pos())
+	off := b.AddU16Byte(OpTestResult, 1, 0, pos())
+	b.Add(OpNil, pos())
+	b.PatchResult(off, 0x1234)
+	got := b.Finish().Code
+	want := []byte{
+		byte(OpTestResult), 1, 0x12, 0x34,
+		byte(OpNil),
+	}
+	if len(got) != len(want) {
+		t.Fatalf("code length: got %d, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("byte %d: got %#x, want %#x", i, got[i], want[i])
+		}
+	}
+}
+
+func TestDisassembleTestResult(t *testing.T) {
+	b := NewBuilder("main", "test.spr", nil)
+	b.AddU16Byte(OpTestResult, 1, 0x0020, pos())
+	b.AddU16Byte(OpTestResult, 0, 0x0030, pos())
+	out := Disassemble(b.Finish())
+	for _, want := range []string{
+		"TEST_RESULT",
+		"ok",
+		"err",
+		"-> 0032",
+		"-> 0048",
+	} {
+		if !strings.Contains(out, want) {
+			t.Errorf("disassembly missing %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestDisassembleStructOps(t *testing.T) {
+	b := NewBuilder("main", "test.spr", nil)
+	nameIdx := b.Const(object.Str{Value: "Point"})
+	fieldIdx := b.Const(object.Str{Value: "x"})
+	b.AddU16Pair(OpMakeStruct, nameIdx, 1, pos())
+	b.AddU16(OpGetMember, fieldIdx, pos())
+	b.AddU16(OpSetMember, fieldIdx, pos())
+	b.AddU16(OpAddMethod, fieldIdx, pos())
+	b.AddU16(OpBuildStruct, 1, pos())
 	b.Add(OpReturn, pos())
 	out := Disassemble(b.Finish())
 
 	for _, want := range []string{
-		"IMPORT",
-		`"lib/math"`,
-		"EXPORT",
-		`"square"`,
+		"MAKE_STRUCT",
+		"(Point)",
+		"fields 1",
+		"GET_MEMBER",
+		"SET_MEMBER",
+		"ADD_METHOD",
+		"BUILD_STRUCT",
 	} {
 		if !strings.Contains(out, want) {
 			t.Errorf("disassembly missing %q:\n%s", want, out)

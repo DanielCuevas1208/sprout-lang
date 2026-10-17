@@ -151,6 +151,124 @@ func TestStatements(t *testing.T) {
 			"let g = fn(x) { return x }",
 			"(program (let g value (fn (params x) (block (return value x)))))",
 		},
+		{
+			`import "util"`,
+			`(program (import "util" as util))`,
+		},
+		{
+			`import "lib/util.spr" as u`,
+			`(program (import "lib/util.spr" as u))`,
+		},
+		{
+			"export let x = 1",
+			"(program (export let x value (int 1)))",
+		},
+		{
+			"export fn f() { return 1 }",
+			"(program (export fn f (params) (block (return value (int 1)))))",
+		},
+		{
+			"let m = util.greet()",
+			"(program (let m value (call (member util .greet))))",
+		},
+		{
+			"print(util.x)",
+			"(program (call print (member util .x)))",
+		},
+		{
+			"struct Point { x y }",
+			"(program (struct Point x y))",
+		},
+		{
+			"struct Point { x, y }",
+			"(program (struct Point x y))",
+		},
+		{
+			"export struct Point { x }",
+			"(program (export struct Point x))",
+		},
+		{
+			"interface Shape { area() scale(f) }",
+			"(program (interface Shape area:0 scale:1))",
+		},
+		{
+			"fn Point.sum() { return self.x }",
+			"(program (method Point.sum (params) (block (return value (member self .x)))))",
+		},
+		{
+			"let p = Point(1, 2)",
+			"(program (let p value (call Point (int 1) (int 2))))",
+		},
+		{
+			"let p = Point(x: 1, y: 2)",
+			"(program (let p value (call Point (named x (int 1)) (named y (int 2)))))",
+		},
+	}
+	for _, c := range cases {
+		expectParse(t, c.src, c.want)
+	}
+}
+
+func TestMatch(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{
+			"match r { ok(v) => { v } }",
+			"(program (match subject r (arm (ok v) (block v)) ))",
+		},
+		{
+			"match r { err(e) => { e }, _ => { nil } }",
+			"(program (match subject r (arm (err e) (block e)) (arm _ (block nil))))",
+		},
+		{
+			"match r { ok(ok(x)) => { x }, _ => { 0 } }",
+			"(program (match subject r (arm (ok (ok x)) (block x)) (arm _ (block (int 0)))))",
+		},
+		{
+			"match n { 0 => { \"zero\" }, 1 => { \"one\" }, _ => { \"many\" } }",
+			"(program (match subject n (arm (int 0) (block (string \"zero\"))) (arm (int 1) (block (string \"one\"))) (arm _ (block (string \"many\")))))",
+		},
+		{
+			"match b { true => { 1 }, false => { 0 }, _ => { -1 } }",
+			"(program (match subject b (arm true (block (int 1))) (arm false (block (int 0))) (arm _ (block (unary - (int 1))))))",
+		},
+		{
+			"match s { \"a\" => { 1 }, v => { v } }",
+			"(program (match subject s (arm (string \"a\") (block (int 1))) (arm v (block v))))",
+		},
+		{
+			"let m = match ok(2) { ok(x) => { x }, _ => { 0 } }",
+			"(program (let m value (match subject (call ok (int 2)) (arm (ok x) (block x)) (arm _ (block (int 0))))))",
+		},
+	}
+	for _, c := range cases {
+		expectParse(t, c.src, c.want)
+	}
+}
+
+func TestMatchParseErrors(t *testing.T) {
+	cases := []struct {
+		src  string
+		want string
+	}{
+		{"match", "expected a value to match"},
+		{"match r", "expected '{'"},
+		{"match r { ok(v) v }", "expected '=>'"},
+		{"match r { ok(v) => { v }", "expected '}'"},
+		{"match r { (1) => { 1 } }", "expected a pattern"},
+		{"match r { ok( => { 1 }, _ => { 0 } }", "expected a pattern"},
+	}
+	for _, c := range cases {
+		expectErrors(t, c.src, c.want)
+	}
+}
+
+func TestParseMethodReceiver(t *testing.T) {
+	cases := []struct {
+		src  string
+		want string
+	}{
+		{"fn Point.move(dx, dy) { self.x = self.x + dx }",
+			"(program (method Point.move (params dx dy) (block (assign (member self .x) (binary + (member self .x) dx)))))"},
 	}
 	for _, c := range cases {
 		expectParse(t, c.src, c.want)
@@ -162,54 +280,6 @@ func TestMultiline(t *testing.T) {
 	_, msgs := parseSexp(src)
 	if len(msgs) > 0 {
 		t.Fatalf("multiline: unexpected errors: %v", msgs)
-	}
-}
-
-func TestImportExport(t *testing.T) {
-	cases := []struct{ src, want string }{
-		{
-			`import "lib/math"`,
-			`(program (import math "lib/math"))`,
-		},
-		{
-			`import "lib/math" as m`,
-			`(program (import m "lib/math"))`,
-		},
-		{
-			`import "strings.spr"`,
-			`(program (import strings "strings.spr"))`,
-		},
-		{
-			"export fn square(x) { return x * x }",
-			"(program (export (fn square (params x) (block (return value (binary * x x))))))",
-		},
-		{
-			"export const pi = 3.14",
-			"(program (export (const pi value (float 3.14))))",
-		},
-		{
-			"export let answer = 42",
-			"(program (export (let answer value (int 42))))",
-		},
-	}
-	for _, c := range cases {
-		expectParse(t, c.src, c.want)
-	}
-}
-
-func TestImportExportErrors(t *testing.T) {
-	cases := []struct {
-		src  string
-		want string
-	}{
-		{"import 42", "expected a module path"},
-		{`import "lib/a-b"`, "not a valid identifier"},
-		{`import "lib/x" as 5`, "expected a name after 'as'"},
-		{"export while true { }", "expected 'let'"},
-		{"export", "expected 'let'"},
-	}
-	for _, c := range cases {
-		expectErrors(t, c.src, c.want)
 	}
 }
 
@@ -229,6 +299,13 @@ func TestParseErrors(t *testing.T) {
 		{"}", "unexpected '}'"},
 		{"for i range(0, 3) { }", "expected 'in'"},
 		{"let x = 1 )", "expected a statement"},
+		{"struct { x }", "expected a name after"},
+		{"struct Point x }", "expected '{'"},
+		{"fn Point.x y { }", "expected '('"},
+		{"fn Point.() { }", "expected a method name"},
+		{"export interface Shape { area() }", "interfaces cannot be exported"},
+		{"f(a: 1, b)", "cannot mix positional and named arguments"},
+		{"f(a, b: 2)", "cannot mix positional and named arguments"},
 	}
 	for _, c := range cases {
 		expectErrors(t, c.src, c.want)
