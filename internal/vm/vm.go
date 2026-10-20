@@ -664,3 +664,22 @@ func (e *Env) set(slot int, value object.Object) {
 	defer e.mu.Unlock()
 	e.slots[slot] = value
 }
+
+// TaskCaptureValues implements runtime.TaskCapture.
+func (c *Closure) TaskCaptureValues() []object.Object {
+	if c == nil || c.env == nil {
+		return nil
+	}
+	return c.env.CapturedValues()
+}
+
+// CapturedValues returns the values reachable from this environment chain.
+func (e *Env) CapturedValues() []object.Object {
+	var values []object.Object
+	for env := e; env != nil; env = env.parent {
+		env.mu.RLock()
+		values = append(values, env.slots...)
+		env.mu.RUnlock()
+	}
+	return values
+}

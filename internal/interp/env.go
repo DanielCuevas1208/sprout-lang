@@ -1,6 +1,7 @@
 package interp
 
 import (
+	"sort"
 	"sync"
 
 	"github.com/sprout-lang/sprout/internal/object"
@@ -79,4 +80,24 @@ func (e *Env) IsConst(name string) bool {
 		}
 	}
 	return false
+}
+
+// CapturedValues returns the values reachable from this environment chain.
+//
+// The order is stable so diagnostics and tests do not depend on map iteration.
+func (e *Env) CapturedValues() []object.Object {
+	var values []object.Object
+	for env := e; env != nil; env = env.parent {
+		env.mu.RLock()
+		names := make([]string, 0, len(env.vars))
+		for name := range env.vars {
+			names = append(names, name)
+		}
+		sort.Strings(names)
+		for _, name := range names {
+			values = append(values, env.vars[name].value)
+		}
+		env.mu.RUnlock()
+	}
+	return values
 }

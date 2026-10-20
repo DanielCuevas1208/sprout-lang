@@ -14,6 +14,9 @@ func (vm *VM) spawn(fn object.Object, args []object.Object, pos source.Pos) (*ob
 	if !isSpawnable(fn) {
 		return nil, fmt.Errorf("spawn() expects a function, got %s", fn.Type())
 	}
+	if err := runtime.ValidateTaskCapture(fn); err != nil {
+		return nil, err
+	}
 	task := object.NewTask()
 	go func() {
 		child := NewWithIO(vm.ctx.Stdin, vm.ctx.Stdout, vm.ctx.Stderr)

@@ -12,6 +12,7 @@ Version 0.8 added channel selection.
 Version 0.9 added scheduler controls.
 Version 0.10 added configurable scheduler policies.
 Version 0.11 adds bounded task waits.
+Version 0.12 adds task isolation rules for spawned closures.
 The interpreter and the VM share one runtime and one standard library.
 Sprout produces friendly diagnostics that point at the exact problem.
 
@@ -29,6 +30,7 @@ The codebase is structured to grow cleanly over time.
 - Channel selection for deterministic fan-in programs.
 - Scheduler controls for fair task handoff and cancellable pauses.
 - Optional timeouts for task waits that prevent indefinite blocking.
+- Task isolation rules that reject mutable captured values.
 - A `match` expression with wildcard and variable patterns.
 - A bytecode compiler and a stack-based virtual machine.
 - A tree-walking interpreter that shares the runtime with the VM.
@@ -257,6 +259,7 @@ Version 0.8 added channel selection.
 Version 0.9 added scheduler controls.
 Version 0.10 added configurable scheduler policies.
 Version 0.11 added bounded task waits.
+Version 0.12 adds task isolation rules for spawned closures.
 A channel moves values between spawned functions.
 A task reports one spawned function.
 
@@ -384,6 +387,37 @@ cancelled
 ```
 
 See `examples/timeout.spr` for the complete program.
+
+Captured task state follows one bounded rule.
+Scalar values, channels, and tasks are allowed.
+Lists, maps, and struct instances are rejected.
+Nested mutable values are also rejected.
+The check covers all values reachable from the closure environment.
+Use channels to share task state.
+
+```sprout
+let label = "cancelled"
+let gate = channel()
+let worker = spawn(fn() {
+    recv(gate)
+    if is_cancelled() {
+        return label
+    }
+    return "unexpected"
+})
+
+cancel(worker)
+print("task result:", unwrap_or(await(worker), "cancelled"))
+close(gate)
+```
+
+The example prints this output.
+
+```text
+task result: cancelled
+```
+
+See `examples/isolation.spr` for the complete program.
 
 ## Modules
 
@@ -533,6 +567,7 @@ The `examples` directory holds documented programs.
 - `select.spr` fans in values from several channels.
 - `scheduler.spr` gives tasks explicit scheduling opportunities.
 - `timeout.spr` bounds a task wait before cancellation.
+- `isolation.spr` demonstrates task capture rules.
 - `guess.spr` is an interactive game.
 - `project` is a multi-file module project.
 
@@ -624,6 +659,7 @@ The parity tests run each program on both engines.
 The VM tests match the same goldens as the interpreter.
 Module tests run projects and bundles on both engines.
 Concurrency tests cover blocking, close, cancellation, selection, scheduler policies, task completion, timeouts, and engine parity.
+Task isolation tests cover accepted scalar captures and rejected mutable captures.
 Match programs run on both engines and must agree.
 Tests use deterministic fixtures. They do not use secrets.
 Scheduler tests inject one policy into both engines and child tasks.
@@ -674,7 +710,14 @@ Version 0.11 is complete. It added bounded task waits.
 The timeout does not cancel the task.
 Both engines use the same task wait implementation.
 
-Version 1.0 remains open for stronger task isolation and additional scheduler policies.
+Version 0.12 is complete. It defines task capture isolation.
+Spawn rejects captured lists, maps, and struct instances.
+Channels, tasks, and scalar values remain shareable.
+Both engines report the same rejection.
+
+See [ROADMAP.md](ROADMAP.md) for milestone IDs, acceptance criteria, and verification commands.
+
+Version 1.0 remains open for scheduler replay and safer channel value transfer.
 
 ## Limitations
 
@@ -696,8 +739,8 @@ Version 1.0 remains open for stronger task isolation and additional scheduler po
 - `yield()` does not guarantee that another task runs immediately.
 - The `direct` policy does not force a task handoff.
 - `sleep()` uses wall-clock time, so wake order is not a timing contract.
-- A spawned function shares captured mutable values with its parent.
-- Do not mutate captured lists, maps, or structs from multiple tasks.
+- Spawn rejects captured lists, maps, and struct instances.
+- Channel messages can still contain shared mutable values.
 - A program must await tasks that it needs before it exits.
 - A pattern binds at most one variable.
 - Match patterns cover literals, names, and results only.
