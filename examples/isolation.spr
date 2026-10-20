@@ -1,0 +1,13 @@
+let label = "cancelled"
+let gate = channel()
+let worker = spawn(fn() {
+    recv(gate)
+    if is_cancelled() {
+        return label
+    }
+    return "unexpected"
+})
+
+cancel(worker)
+print("task result:", unwrap_or(await(worker), "cancelled"))
+close(gate)

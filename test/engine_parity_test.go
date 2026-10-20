@@ -412,3 +412,50 @@ close(gate)`
 		t.Fatalf("timed await output = %q, want %q", ivOut, want)
 	}
 }
+
+func TestEnginesAgreeOnTaskIsolation(t *testing.T) {
+	accepted := `let label = "cancelled"
+let gate = channel()
+let worker = spawn(fn() {
+    recv(gate)
+    if is_cancelled() {
+        return label
+    }
+    return "unexpected"
+})
+cancel(worker)
+print(unwrap_or(await(worker), "cancelled"))
+close(gate)`
+	interpOutput, interpErr := runInterpSrc(accepted)
+	vmOutput, vmErr := runVMSrc(accepted)
+	if interpErr != nil || vmErr != nil {
+		t.Fatalf("accepted capture errors: interpreter=%v vm=%v", interpErr, vmErr)
+	}
+	if interpOutput != "cancelled\n" || vmOutput != interpOutput {
+		t.Fatalf("accepted capture output = %q and %q, want identical cancellation output", interpOutput, vmOutput)
+	}
+
+	rejected := []string{
+		`let items = [1]
+spawn(fn() { return len(items) })`,
+		`let values = {"answer": 42}
+spawn(fn() { return values["answer"] })`,
+		`struct Box { value }
+let box = Box(42)
+spawn(fn() { return box.value })`,
+	}
+	for _, src := range rejected {
+		interpOutput, interpErr = runInterpSrc(src)
+		vmOutput, vmErr = runVMSrc(src)
+		if interpErr == nil || vmErr == nil {
+			t.Errorf("expected both engines to reject mutable capture for:\n%s\ninterpreter=%v vm=%v", src, interpErr, vmErr)
+			continue
+		}
+		if interpOutput != vmOutput {
+			t.Errorf("rejected capture stdout differs for:\n%s\ninterp: %q\nvm: %q", src, interpOutput, vmOutput)
+		}
+		if interpErr.Error() != vmErr.Error() {
+			t.Errorf("rejected capture errors differ for:\n%s\ninterp: %q\nvm: %q", src, interpErr.Error(), vmErr.Error())
+		}
+	}
+}

@@ -30,3 +30,11 @@ func (f *Function) String() string {
 	}
 	return fmt.Sprintf("<fn (%s)>", strings.Join(params, ", "))
 }
+
+// TaskCaptureValues implements runtime.TaskCapture.
+func (f *Function) TaskCaptureValues() []object.Object {
+	if f == nil || f.Env == nil {
+		return nil
+	}
+	return f.Env.CapturedValues()
+}

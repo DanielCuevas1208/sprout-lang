@@ -15,6 +15,9 @@ func (iv *Interpreter) spawn(fn object.Object, args []object.Object, pos source.
 	if !isSpawnable(fn) {
 		return nil, fmt.Errorf("spawn() expects a function, got %s", fn.Type())
 	}
+	if err := runtime.ValidateTaskCapture(fn); err != nil {
+		return nil, err
+	}
 	task := object.NewTask()
 	go func() {
 		child := NewWithIO(iv.ctx.Stdin, iv.ctx.Stdout, iv.ctx.Stderr)

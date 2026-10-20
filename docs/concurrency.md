@@ -1,6 +1,6 @@
 # Concurrency
 
-Sprout 0.11 provides channels, tasks, cancellation, selection, scheduler policies, and bounded waits.
+Sprout 0.12 provides channels, tasks, cancellation, selection, scheduler policies, bounded waits, and task isolation.
 
 ## Channels
 
@@ -46,6 +46,18 @@ close(gate)
 ```
 
 The program prints `timed out` and `cancelled`.
+
+## Task isolation
+
+`spawn` checks captured values before it starts a task.
+A closure may capture scalar values, channels, and tasks.
+A closure must not capture a list, map, or struct instance.
+Nested mutable values are rejected.
+The check covers all values reachable from the closure environment.
+The check returns an error before task creation.
+Use channels to share task state.
+
+See `examples/isolation.spr` for a complete example.
 
 ## Cancellation
 
@@ -151,7 +163,8 @@ sprout vm -scheduler direct examples/scheduler.spr
 ## Execution model
 
 Each task uses a child interpreter or VM context.
-Closures keep their captured environment.
+Closures use captured lexical values.
+The runtime rejects captured mutable values.
 Channels and tasks remain safe to share between contexts.
 The parent and child contexts share configured input and output streams.
 
@@ -166,4 +179,4 @@ The `direct` policy does not force a task handoff.
 `sleep()` uses wall-clock time, so wake order is not a timing contract.
 A positive await timeout also uses wall-clock time.
 An unbounded `await` can block when a task ignores cancellation.
-Do not mutate captured lists, maps, or structs from multiple tasks.
+Channel messages can still contain shared mutable values.
