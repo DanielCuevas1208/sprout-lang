@@ -104,8 +104,6 @@ Acceptance: Timeouts do not cancel the waiting task.
 
 Verify: go test ./test -run TimedAwait
 
-## Current release
-
 ### task-isolation — complete
 
 Outcome: Spawned closures have explicit mutable-state rules.
@@ -128,13 +126,13 @@ Verify:
 - `go run ./cmd/sprout run examples/isolation.spr`
 - `go run ./cmd/sprout vm examples/isolation.spr`
 
-## Future milestones
+## Current release
 
-### scheduler-replay — planned
+### scheduler-replay — complete
 
-Outcome: Developers can reproduce one logical task schedule.
+Outcome: Developers can reproduce one logical scheduler action sequence.
 
-Deliverable: Record and replay scheduler choices without wall-clock timing.
+Deliverable: Record and replay `yield` and `sleep` actions without wall-clock timing.
 
 Acceptance:
 
@@ -142,7 +140,15 @@ Acceptance:
 - Incompatible traces fail with a clear error.
 - Interpreter and VM outputs match for replayed scenarios.
 
-Verify: go test ./test -run TestEnginesAgreeOnSchedulerReplay
+Verify:
+
+- `go test ./internal/runtime -run 'SchedulerTrace|RecordingScheduler|ReplayScheduler'`
+- `go test ./test -run TestEnginesAgreeOnSchedulerReplay`
+- `go test ./test -run TestSchedulerTraceRejectsIncompatibleReplay`
+- `go run ./cmd/sprout run -scheduler-trace record:trace.json examples/scheduler_replay.spr`
+- `go run ./cmd/sprout run -scheduler-trace replay:trace.json examples/scheduler_replay.spr`
+
+## Future milestones
 
 ### channel-value-ownership — planned
 
@@ -157,3 +163,31 @@ Acceptance:
 - Interpreter and VM behavior matches.
 
 Verify: go test ./test -run TestEnginesAgreeOnChannelValueOwnership
+
+### select-trace-replay — planned
+
+Outcome: Developers can replay channel selection order in one trace file.
+
+Deliverable: Extend scheduler traces with select index decisions.
+
+Acceptance:
+
+- A fan-in example records select indices and replays them.
+- Mismatched select traces fail before the program finishes.
+- Interpreter and VM outputs match for replayed selection.
+
+Verify: go test ./test -run TestEnginesAgreeOnSelectTraceReplay
+
+### sprout-test-files — planned
+
+Outcome: Projects can run `.spr` files that use `assert` as automated checks.
+
+Deliverable: A `sprout test` command that runs files in a `tests/` directory.
+
+Acceptance:
+
+- A sample project runs passing and failing test files.
+- Failures print the same diagnostics as `sprout run`.
+- The command exits with a non-zero status on failure.
+
+Verify: go test ./test -run TestSproutTestCommand

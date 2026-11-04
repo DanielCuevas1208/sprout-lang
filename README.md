@@ -13,6 +13,7 @@ Version 0.9 added scheduler controls.
 Version 0.10 added configurable scheduler policies.
 Version 0.11 adds bounded task waits.
 Version 0.12 adds task isolation rules for spawned closures.
+Version 0.13 adds scheduler trace record and replay.
 The interpreter and the VM share one runtime and one standard library.
 Sprout produces friendly diagnostics that point at the exact problem.
 
@@ -31,6 +32,7 @@ The codebase is structured to grow cleanly over time.
 - Scheduler controls for fair task handoff and cancellable pauses.
 - Optional timeouts for task waits that prevent indefinite blocking.
 - Task isolation rules that reject mutable captured values.
+- Scheduler trace record and replay for deterministic concurrency checks.
 - A `match` expression with wildcard and variable patterns.
 - A bytecode compiler and a stack-based virtual machine.
 - A tree-walking interpreter that shares the runtime with the VM.
@@ -115,6 +117,7 @@ Those commands then use the entry named in `sprout.toml`.
 Run `sprout help` to see the full usage.
 Add `-color always` to force colored diagnostics.
 Use `-scheduler fair` or `-scheduler direct` with `run` and `vm`.
+Use `-scheduler-trace record:FILE` or `-scheduler-trace replay:FILE` with `run` and `vm`.
 
 ## Diagnostics
 
@@ -260,6 +263,7 @@ Version 0.9 added scheduler controls.
 Version 0.10 added configurable scheduler policies.
 Version 0.11 added bounded task waits.
 Version 0.12 adds task isolation rules for spawned closures.
+Version 0.13 adds scheduler trace record and replay.
 A channel moves values between spawned functions.
 A task reports one spawned function.
 
@@ -419,6 +423,24 @@ task result: cancelled
 
 See `examples/isolation.spr` for the complete program.
 
+Record scheduler actions while a program runs.
+Replay the same trace to skip wall-clock sleeps.
+
+```text
+sprout run -scheduler-trace record:trace.json examples/scheduler_replay.spr
+sprout vm -scheduler-trace replay:trace.json examples/scheduler_replay.spr
+```
+
+The example prints this output.
+
+```text
+started
+finished
+done
+```
+
+See `examples/scheduler_replay.spr` for the complete program.
+
 ## Modules
 
 A module is a separate Sprout file.
@@ -503,6 +525,9 @@ Version 0.7 runs cooperative cancellation on both engines.
 Version 0.8 runs channel selection on both engines.
 Version 0.9 runs scheduler controls on both engines.
 Version 0.10 runs both scheduler policies through the same runtime interface.
+Version 0.11 runs bounded task waits on both engines.
+Version 0.12 enforces task isolation on both engines.
+Version 0.13 replays scheduler action traces on both engines.
 
 The `dis` command shows the compiled instructions.
 
@@ -568,6 +593,7 @@ The `examples` directory holds documented programs.
 - `scheduler.spr` gives tasks explicit scheduling opportunities.
 - `timeout.spr` bounds a task wait before cancellation.
 - `isolation.spr` demonstrates task capture rules.
+- `scheduler_replay.spr` records and replays scheduler actions.
 - `guess.spr` is an interactive game.
 - `project` is a multi-file module project.
 
@@ -605,8 +631,9 @@ The runtime is the single source of truth for both engines.
 A struct type, its methods, and its field access live in one place.
 Channels and tasks live in the object and runtime packages.
 Adding a feature means updating the runtime, then both engines stay in step.
-The CLI creates one scheduler for the selected engine.
-Child tasks inherit that scheduler.
+The CLI creates one scheduler session for the selected engine.
+A recording session writes actions. A replay session validates actions.
+Child tasks share the session.
 
 ## Development
 
@@ -660,6 +687,7 @@ The VM tests match the same goldens as the interpreter.
 Module tests run projects and bundles on both engines.
 Concurrency tests cover blocking, close, cancellation, selection, scheduler policies, task completion, timeouts, and engine parity.
 Task isolation tests cover accepted scalar captures and rejected mutable captures.
+Scheduler replay tests cover trace record, replay, mismatch detection, and engine parity.
 Match programs run on both engines and must agree.
 Tests use deterministic fixtures. They do not use secrets.
 Scheduler tests inject one policy into both engines and child tasks.
@@ -715,9 +743,14 @@ Spawn rejects captured lists, maps, and struct instances.
 Channels, tasks, and scalar values remain shareable.
 Both engines report the same rejection.
 
+Version 0.13 is complete. It adds scheduler trace record and replay.
+Traces store yield and sleep decisions in JSON.
+Replay skips wall-clock sleeps and rejects incompatible traces.
+Both engines match on recorded concurrency examples.
+
 See [ROADMAP.md](ROADMAP.md) for milestone IDs, acceptance criteria, and verification commands.
 
-Version 1.0 remains open for scheduler replay and safer channel value transfer.
+Version 1.0 remains open for safer channel value transfer and broader trace coverage.
 
 ## Limitations
 
@@ -740,6 +773,7 @@ Version 1.0 remains open for scheduler replay and safer channel value transfer.
 - The `direct` policy does not force a task handoff.
 - `sleep()` uses wall-clock time, so wake order is not a timing contract.
 - Spawn rejects captured lists, maps, and struct instances.
+- Scheduler replay covers yield and sleep only. It does not record select order.
 - Channel messages can still contain shared mutable values.
 - A program must await tasks that it needs before it exits.
 - A pattern binds at most one variable.

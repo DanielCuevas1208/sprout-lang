@@ -1,0 +1,20 @@
+// scheduler_replay.spr — record yield and sleep, then replay without waiting.
+//
+// Record:
+//   sprout run -scheduler-trace record:trace.json examples/scheduler_replay.spr
+// Replay:
+//   sprout run -scheduler-trace replay:trace.json examples/scheduler_replay.spr
+
+let events = channel(1)
+let worker = spawn(fn() {
+    send(events, "started")
+    yield()
+    sleep(5)
+    send(events, "finished")
+    return "done"
+})
+
+print(unwrap(recv(events)))
+print(unwrap(recv(events)))
+print(unwrap(await(worker)))
+close(events)

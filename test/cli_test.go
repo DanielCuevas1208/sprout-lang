@@ -78,7 +78,7 @@ func TestVersion(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("version exit code %d", code)
 	}
-	if !strings.Contains(out, "0.12.0") {
+	if !strings.Contains(out, "0.13.0") {
 		t.Errorf("version output: %q", out)
 	}
 }
@@ -123,6 +123,55 @@ func TestSchedulerPolicyFlag(t *testing.T) {
 	}
 	if !strings.Contains(errOut, "choose fair or direct") {
 		t.Errorf("invalid scheduler error: %q", errOut)
+	}
+}
+
+func TestSchedulerTraceRecordAndReplay(t *testing.T) {
+	example := filepath.Join("..", "examples", "scheduler_replay.spr")
+	tracePath := filepath.Join(t.TempDir(), "trace.json")
+	want := "started\nfinished\ndone\n"
+
+	for _, command := range []string{"run", "vm"} {
+		_, errOut, code := runCLI(t, "", command, "-scheduler-trace", "record:"+tracePath, example)
+		if code != 0 {
+			t.Fatalf("%s record exit code %d: %s", command, code, errOut)
+		}
+		out, errOut, code := runCLI(t, "", command, "-scheduler-trace", "replay:"+tracePath, example)
+		if code != 0 {
+			t.Fatalf("%s replay exit code %d: %s", command, code, errOut)
+		}
+		if out != want {
+			t.Errorf("%s replay output = %q, want %q", command, out, want)
+		}
+	}
+}
+
+func TestSchedulerTraceRejectsIncompatibleReplay(t *testing.T) {
+	tracePath := filepath.Join(t.TempDir(), "trace.json")
+	recordExample := filepath.Join("..", "examples", "scheduler_replay.spr")
+	replayExample := filepath.Join(t.TempDir(), "mismatch.spr")
+	if err := os.WriteFile(replayExample, []byte("yield()\nsleep(1)\nprint(\"done\")\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, errOut, code := runCLI(t, "", "run", "-scheduler", "direct", "-scheduler-trace", "record:"+tracePath, recordExample)
+	if code != 0 {
+		t.Fatalf("record exit code %d: %s", code, errOut)
+	}
+	_, errOut, code = runCLI(t, "", "run", "-scheduler", "direct", "-scheduler-trace", "replay:"+tracePath, replayExample)
+	if code != 1 {
+		t.Fatalf("incompatible replay exit code = %d, want 1: %s", code, errOut)
+	}
+	if !strings.Contains(errOut, "expected sleep(5), got sleep(1)") {
+		t.Fatalf("incompatible replay error = %q", errOut)
+	}
+
+	_, errOut, code = runCLI(t, "", "run", "-scheduler", "fair", "-scheduler-trace", "replay:"+tracePath, recordExample)
+	if code != 2 {
+		t.Fatalf("policy mismatch exit code = %d, want 2: %s", code, errOut)
+	}
+	if !strings.Contains(errOut, "does not match requested policy") {
+		t.Fatalf("policy mismatch error = %q", errOut)
 	}
 }
 
