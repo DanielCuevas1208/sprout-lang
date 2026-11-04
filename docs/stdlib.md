@@ -140,6 +140,7 @@ It skips closed channels without buffered values.
 `yield` does not guarantee a task switch.
 `sleep` observes cancellation and uses wall-clock time.
 Use `-scheduler fair` or `-scheduler direct` with `run` and `vm`.
+Use `-scheduler-trace record:FILE` or `replay:FILE` to save or replay actions.
 See `docs/concurrency.md` for the full reference.
 
 ## Assertions

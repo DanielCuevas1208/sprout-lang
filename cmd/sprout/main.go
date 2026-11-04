@@ -26,7 +26,7 @@ import (
 	"github.com/sprout-lang/sprout/internal/vm"
 )
 
-const version = "0.12.0"
+const version = "0.13.0"
 
 func main() {
 	os.Exit(run(os.Args[1:]))
@@ -94,6 +94,7 @@ func usage(w io.Writer) {
 	fmt.Fprintln(w, "  -color auto|always|never   control colored diagnostics")
 	fmt.Fprintln(w, "Options for run and vm:")
 	fmt.Fprintln(w, "  -scheduler fair|direct     choose task handoff policy")
+	fmt.Fprintln(w, "  -scheduler-trace MODE       record or replay scheduler actions")
 }
 
 func looksLikeFile(name string) bool {
@@ -117,17 +118,19 @@ func readSource(path string) (*source.File, int) {
 //
 // A file argument wins. Without one, the command uses the nearest sprout.toml
 // project. The color mode follows the -color flag.
-// Run and vm also accept -scheduler.
-func resolveEntry(desc string, args []string) (path string, libDirs []string, color bool, policy runtime.SchedulerPolicy, code int) {
+// Run and vm also accept -scheduler and -scheduler-trace.
+func resolveEntry(desc string, args []string) (path string, libDirs []string, color bool, policy runtime.SchedulerPolicy, recordTrace, replayTrace string, code int) {
 	fs := flag.NewFlagSet(desc, flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	colorMode := fs.String("color", "auto", "color output: auto, always, or never")
 	var schedulerFlag *string
+	var schedulerTraceFlag *string
 	if desc == "run" || desc == "vm" {
 		schedulerFlag = fs.String("scheduler", string(runtime.SchedulerFair), "scheduler policy: fair or direct")
+		schedulerTraceFlag = fs.String("scheduler-trace", "", "record or replay scheduler actions: record:FILE or replay:FILE")
 	}
 	if err := fs.Parse(args); err != nil {
-		return "", nil, false, "", 2
+		return "", nil, false, "", "", "", 2
 	}
 	schedulerName := string(runtime.SchedulerFair)
 	if schedulerFlag != nil {
@@ -136,22 +139,30 @@ func resolveEntry(desc string, args []string) (path string, libDirs []string, co
 	schedulerPolicy, err := runtime.ParseSchedulerPolicy(schedulerName)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "sprout: %s: %v\n", desc, err)
-		return "", nil, false, "", 2
+		return "", nil, false, "", "", "", 2
+	}
+	recordTrace, replayTrace, err = runtime.ParseSchedulerTraceFlag("")
+	if schedulerTraceFlag != nil {
+		recordTrace, replayTrace, err = runtime.ParseSchedulerTraceFlag(*schedulerTraceFlag)
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "sprout: %s: %v\n", desc, err)
+		return "", nil, false, "", "", "", 2
 	}
 	switch fs.NArg() {
 	case 1:
 		path := fs.Arg(0)
-		return path, libDirsFor(path), colorEnabled(*colorMode), schedulerPolicy, 0
+		return path, libDirsFor(path), colorEnabled(*colorMode), schedulerPolicy, recordTrace, replayTrace, 0
 	case 0:
 		dir, m, err := module.FindManifest(".")
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "sprout: %s expects one file (or run it inside a project)\n", desc)
-			return "", nil, false, "", 2
+			return "", nil, false, "", "", "", 2
 		}
-		return m.EntryPath(dir), m.LibDirs(dir), colorEnabled(*colorMode), schedulerPolicy, 0
+		return m.EntryPath(dir), m.LibDirs(dir), colorEnabled(*colorMode), schedulerPolicy, recordTrace, replayTrace, 0
 	default:
 		fmt.Fprintf(os.Stderr, "sprout: %s expects at most one file\n", desc)
-		return "", nil, false, "", 2
+		return "", nil, false, "", "", "", 2
 	}
 }
 
@@ -169,26 +180,26 @@ func libDirsFor(path string) []string {
 }
 
 // loadProject reads the entry file and its modules, then checks them all.
-func loadProject(desc string, args []string) (*module.Graph, *diag.Reporter, runtime.SchedulerPolicy, int) {
-	path, libDirs, color, policy, code := resolveEntry(desc, args)
+func loadProject(desc string, args []string) (*module.Graph, *diag.Reporter, runtime.SchedulerPolicy, string, string, int) {
+	path, libDirs, color, policy, recordTrace, replayTrace, code := resolveEntry(desc, args)
 	if code != 0 {
-		return nil, nil, "", code
+		return nil, nil, "", "", "", code
 	}
 	g, diags := module.Load(path, module.LoadOptions{LibDirs: libDirs})
 	if hasErrors(diags) {
 		(&diag.Reporter{Color: color}).Write(os.Stderr, diags)
-		return nil, nil, "", 1
+		return nil, nil, "", "", "", 1
 	}
 	if diags := checker.CheckGraph(g); hasErrors(diags) {
 		(&diag.Reporter{Color: color}).Write(os.Stderr, diags)
-		return nil, nil, "", 1
+		return nil, nil, "", "", "", 1
 	}
-	return g, &diag.Reporter{Color: color}, policy, 0
+	return g, &diag.Reporter{Color: color}, policy, recordTrace, replayTrace, 0
 }
 
 // runProject runs the run, vm, and dis commands on a loaded project.
 func runProject(desc string, args []string) int {
-	g, rep, policy, code := loadProject(desc, args)
+	g, rep, policy, recordTrace, replayTrace, code := loadProject(desc, args)
 	if code != 0 {
 		return code
 	}
@@ -196,7 +207,7 @@ func runProject(desc string, args []string) int {
 	switch desc {
 	case "run":
 		iv := interp.NewWithIO(os.Stdin, os.Stdout, os.Stderr)
-		scheduler, err := runtime.NewScheduler(policy)
+		scheduler, finish, err := runtime.OpenSchedulerSession(policy, recordTrace, replayTrace)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "sprout: run: %v\n", err)
 			return 2
@@ -206,6 +217,10 @@ func runProject(desc string, args []string) int {
 		_, rerr := iv.Exec(g.Entry.Source, g.Entry.Prog)
 		if rerr != nil {
 			printRunError(os.Stderr, rep, rerr.Message, rerr.File, rerr.Pos, rerr.Frames)
+			return 1
+		}
+		if err := finish(); err != nil {
+			fmt.Fprintf(os.Stderr, "sprout: run: %v\n", err)
 			return 1
 		}
 		return 0
@@ -221,7 +236,7 @@ func runProject(desc string, args []string) int {
 			return 1
 		}
 		machine := vm.NewWithIO(os.Stdin, os.Stdout, os.Stderr)
-		scheduler, err := runtime.NewScheduler(policy)
+		scheduler, finish, err := runtime.OpenSchedulerSession(policy, recordTrace, replayTrace)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "sprout: vm: %v\n", err)
 			return 2
@@ -230,6 +245,10 @@ func runProject(desc string, args []string) int {
 		_, rerr := machine.Run(g.Entry.Source, compiled)
 		if rerr != nil {
 			printRunError(os.Stderr, rep, rerr.Message, rerr.File, rerr.Pos, rerr.Frames)
+			return 1
+		}
+		if err := finish(); err != nil {
+			fmt.Fprintf(os.Stderr, "sprout: vm: %v\n", err)
 			return 1
 		}
 		return 0
@@ -323,7 +342,7 @@ func runParse(args []string) int {
 }
 
 func runCheck(args []string) int {
-	_, _, _, code := loadProject("check", args)
+	_, _, _, _, _, code := loadProject("check", args)
 	if code != 0 {
 		return code
 	}

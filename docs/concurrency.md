@@ -1,6 +1,6 @@
 # Concurrency
 
-Sprout 0.12 provides channels, tasks, cancellation, selection, scheduler policies, bounded waits, and task isolation.
+Sprout 0.13 provides channels, tasks, cancellation, selection, scheduler policies, bounded waits, task isolation, and scheduler trace replay.
 
 ## Channels
 
@@ -160,6 +160,23 @@ The interpreter, VM, and child tasks use one policy.
 sprout vm -scheduler direct examples/scheduler.spr
 ```
 
+## Scheduler trace replay
+
+Record yield and sleep decisions while a program runs.
+Replay the trace to execute the same logical action sequence without wall-clock sleeps.
+
+```text
+sprout run -scheduler-trace record:trace.json examples/scheduler_replay.spr
+sprout vm -scheduler-trace replay:trace.json examples/scheduler_replay.spr
+```
+
+The trace is JSON. It stores the scheduler policy and an ordered action list.
+Replay fails when the program issues a different action or leaves unused trace steps.
+Replay requires the same scheduler policy as recording.
+
+Traces cover `yield()` and `sleep()` only.
+They do not record task identities or `select()` choices yet.
+
 ## Execution model
 
 Each task uses a child interpreter or VM context.
@@ -176,7 +193,8 @@ Await every task that the program needs.
 Cancellation has no automatic timeout.
 `yield()` does not guarantee that another task runs immediately.
 The `direct` policy does not force a task handoff.
-`sleep()` uses wall-clock time, so wake order is not a timing contract.
+`sleep()` uses wall-clock time during normal runs, so wake order is not a timing contract.
+Replay mode skips wall-clock sleeps and follows the recorded trace instead.
 A positive await timeout also uses wall-clock time.
 An unbounded `await` can block when a task ignores cancellation.
 Channel messages can still contain shared mutable values.
