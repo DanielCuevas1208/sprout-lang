@@ -14,6 +14,7 @@ Version 0.10 added configurable scheduler policies.
 Version 0.11 adds bounded task waits.
 Version 0.12 adds task isolation rules for spawned closures.
 Version 0.13 adds scheduler trace record and replay.
+Version 0.14 adds channel message ownership rules.
 The interpreter and the VM share one runtime and one standard library.
 Sprout produces friendly diagnostics that point at the exact problem.
 
@@ -32,6 +33,7 @@ The codebase is structured to grow cleanly over time.
 - Scheduler controls for fair task handoff and cancellable pauses.
 - Optional timeouts for task waits that prevent indefinite blocking.
 - Task isolation rules that reject mutable captured values.
+- Channel messages that reject mutable values before delivery.
 - Scheduler trace record and replay for deterministic concurrency checks.
 - A `match` expression with wildcard and variable patterns.
 - A bytecode compiler and a stack-based virtual machine.
@@ -423,6 +425,29 @@ task result: cancelled
 
 See `examples/isolation.spr` for the complete program.
 
+Channel messages use rejection semantics for mutable values.
+Scalars, channels, and tasks can cross a channel.
+Lists, maps, and structs are rejected before delivery.
+Nested mutable values are rejected too.
+
+```sprout
+let messages = channel(2)
+send(messages, 7)
+send(messages, "ready")
+print(unwrap(recv(messages)))
+print(unwrap(recv(messages)))
+close(messages)
+```
+
+The example prints this output.
+
+```text
+7
+ready
+```
+
+See `examples/channel_ownership.spr` for the complete program.
+
 Record scheduler actions while a program runs.
 Replay the same trace to skip wall-clock sleeps.
 
@@ -528,6 +553,7 @@ Version 0.10 runs both scheduler policies through the same runtime interface.
 Version 0.11 runs bounded task waits on both engines.
 Version 0.12 enforces task isolation on both engines.
 Version 0.13 replays scheduler action traces on both engines.
+Version 0.14 enforces channel message ownership on both engines.
 
 The `dis` command shows the compiled instructions.
 
@@ -563,6 +589,9 @@ Version 0.8 adds `select`.
 Version 0.9 added `yield` and `sleep`.
 Version 0.10 added `fair` and `direct` scheduler policies.
 Version 0.11 adds the optional timeout argument to `await`.
+Version 0.12 adds task capture isolation.
+Version 0.13 adds scheduler trace record and replay.
+Version 0.14 rejects mutable channel messages before delivery.
 
 ```sprout
 let nums = [1, 2, 3, 4]
@@ -593,6 +622,7 @@ The `examples` directory holds documented programs.
 - `scheduler.spr` gives tasks explicit scheduling opportunities.
 - `timeout.spr` bounds a task wait before cancellation.
 - `isolation.spr` demonstrates task capture rules.
+- `channel_ownership.spr` demonstrates channel message rules.
 - `scheduler_replay.spr` records and replays scheduler actions.
 - `guess.spr` is an interactive game.
 - `project` is a multi-file module project.
@@ -673,14 +703,14 @@ CI checks formatting, module files, vet, builds, tests, and race safety.
 | `internal/ast` | Source printer round trips. |
 | `internal/module` | Loading, resolution, cycles, and manifests. |
 | `internal/build` | Bundle output and reserved names. |
-| `internal/runtime` | Arithmetic, comparison, indexing, members, results, concurrency, and task waits. |
+| `internal/runtime` | Arithmetic, comparison, indexing, members, results, concurrency, channel ownership, and task waits. |
 | `internal/interp` | Evaluation, closures, structs, and runtime errors. |
 | `internal/code` | Opcodes, the builder, and disassembly. |
 | `internal/compiler` | Bytecode for expressions, structs, and control flow. |
 | `internal/vm` | Execution, closures, structs, and runtime errors. |
 | `internal/diag` | Diagnostic rendering. |
 | `internal/object` | Channels, tasks, cancellation, selection, and shared runtime values. |
-| `test` | Example goldens, engine parity, cancellation, timeouts, and command line. |
+| `test` | Example goldens, engine parity, channel ownership, cancellation, timeouts, and command line. |
 
 The parity tests run each program on both engines.
 The VM tests match the same goldens as the interpreter.
@@ -688,6 +718,7 @@ Module tests run projects and bundles on both engines.
 Concurrency tests cover blocking, close, cancellation, selection, scheduler policies, task completion, timeouts, and engine parity.
 Task isolation tests cover accepted scalar captures and rejected mutable captures.
 Scheduler replay tests cover trace record, replay, mismatch detection, and engine parity.
+Channel ownership tests cover accepted scalars and rejected mutable messages on both engines.
 Match programs run on both engines and must agree.
 Tests use deterministic fixtures. They do not use secrets.
 Scheduler tests inject one policy into both engines and child tasks.
@@ -748,9 +779,14 @@ Traces store yield and sleep decisions in JSON.
 Replay skips wall-clock sleeps and rejects incompatible traces.
 Both engines match on recorded concurrency examples.
 
+Version 0.14 is complete. It defines channel message ownership.
+`send` rejects lists, maps, structs, and nested mutable values.
+Scalars, channels, and tasks remain shareable.
+Both engines report the same result and diagnostic.
+
 See [ROADMAP.md](ROADMAP.md) for milestone IDs, acceptance criteria, and verification commands.
 
-Version 1.0 remains open for safer channel value transfer and broader trace coverage.
+Version 1.0 remains open for select trace coverage and test-file commands.
 
 ## Limitations
 
@@ -774,7 +810,7 @@ Version 1.0 remains open for safer channel value transfer and broader trace cove
 - `sleep()` uses wall-clock time, so wake order is not a timing contract.
 - Spawn rejects captured lists, maps, and struct instances.
 - Scheduler replay covers yield and sleep only. It does not record select order.
-- Channel messages can still contain shared mutable values.
+- Channel messages reject mutable values. They do not copy or transfer them.
 - A program must await tasks that it needs before it exits.
 - A pattern binds at most one variable.
 - Match patterns cover literals, names, and results only.

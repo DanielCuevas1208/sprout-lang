@@ -1,0 +1,9 @@
+// Channel messages reject mutable values.
+// Scalars and synchronization handles can cross a channel safely.
+
+let messages = channel(2)
+send(messages, 7)
+send(messages, "ready")
+print(unwrap(recv(messages)))
+print(unwrap(recv(messages)))
+close(messages)

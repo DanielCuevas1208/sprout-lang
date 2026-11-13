@@ -148,13 +148,13 @@ Verify:
 - `go run ./cmd/sprout run -scheduler-trace record:trace.json examples/scheduler_replay.spr`
 - `go run ./cmd/sprout run -scheduler-trace replay:trace.json examples/scheduler_replay.spr`
 
-## Future milestones
-
-### channel-value-ownership — planned
+### channel-value-ownership — complete
 
 Outcome: Channel messages have explicit mutable-value ownership.
 
-Deliverable: Choose transfer, copy, or rejection semantics for mutable payloads.
+Deliverable: Use rejection semantics for mutable channel payloads.
+
+Policy: Scalars, channels, tasks, and results with allowed values remain shareable. Lists, maps, structs, and nested mutable values are rejected before delivery.
 
 Acceptance:
 
@@ -162,7 +162,21 @@ Acceptance:
 - Accepted and rejected messages have deterministic results.
 - Interpreter and VM behavior matches.
 
-Verify: go test ./test -run TestEnginesAgreeOnChannelValueOwnership
+Evidence:
+
+- `TestValidateChannelValue` covers accepted values and nested mutable values.
+- `TestBuiltinSendRejectsMutableValueBeforeBlocking` proves rejection precedes blocking.
+- `TestEnginesAgreeOnChannelValueOwnership` covers interpreter and VM parity.
+- `examples/channel_ownership.spr` has matching interpreter and VM output.
+
+Verify:
+
+- `go test ./internal/runtime -run 'TestValidateChannelValue|TestBuiltinSendRejectsMutableValueBeforeBlocking'`
+- `go test ./test -run TestEnginesAgreeOnChannelValueOwnership`
+- `go run ./cmd/sprout run examples/channel_ownership.spr`
+- `go run ./cmd/sprout vm examples/channel_ownership.spr`
+
+## Future milestones
 
 ### select-trace-replay — planned
 

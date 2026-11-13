@@ -1,6 +1,6 @@
 # Concurrency
 
-Sprout 0.13 provides channels, tasks, cancellation, selection, scheduler policies, bounded waits, task isolation, and scheduler trace replay.
+Sprout 0.14 provides channel ownership, channels, tasks, cancellation, selection, scheduler policies, bounded waits, task isolation, and trace replay.
 
 ## Channels
 
@@ -14,6 +14,28 @@ Close a channel with `close(channel)`.
 
 `recv` returns `ok(value)` while the channel remains open.
 It returns `err("channel closed")` after close.
+
+## Channel message ownership
+
+Channel sends use rejection semantics for mutable values.
+Scalar values, channels, and tasks can cross a channel.
+Results can cross when their contained value follows the same rule.
+
+`send` rejects lists, maps, and struct instances.
+It also rejects nested mutable values inside results, modules, methods, and closures.
+The check runs before a send can block or deliver a message.
+
+```sprout
+let messages = channel(2)
+send(messages, 7)
+send(messages, "ready")
+print(unwrap(recv(messages)))
+print(unwrap(recv(messages)))
+close(messages)
+```
+
+The program prints `7` and `ready`.
+See `examples/channel_ownership.spr` for the complete example.
 
 ## Tasks
 
@@ -197,4 +219,5 @@ The `direct` policy does not force a task handoff.
 Replay mode skips wall-clock sleeps and follows the recorded trace instead.
 A positive await timeout also uses wall-clock time.
 An unbounded `await` can block when a task ignores cancellation.
-Channel messages can still contain shared mutable values.
+Channel messages reject mutable values.
+They do not copy or transfer mutable values.
