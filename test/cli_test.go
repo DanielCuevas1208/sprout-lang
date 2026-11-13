@@ -78,7 +78,7 @@ func TestVersion(t *testing.T) {
 	if code != 0 {
 		t.Fatalf("version exit code %d", code)
 	}
-	if !strings.Contains(out, "0.13.0") {
+	if !strings.Contains(out, "0.14.0") {
 		t.Errorf("version output: %q", out)
 	}
 }

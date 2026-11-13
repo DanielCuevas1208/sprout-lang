@@ -382,6 +382,7 @@ Sprout 0.10 runs configurable scheduler policies on both engines.
 Sprout 0.11 runs configurable scheduler policies and bounded task waits on both engines.
 Sprout 0.12 rejects mutable values captured by spawned tasks.
 Sprout 0.13 records and replays scheduler actions on both engines.
+Sprout 0.14 rejects mutable values sent through channels.
 It shares the parser, the checker, and the standard library with the
 interpreter. The two engines produce the same results.
 
@@ -441,6 +442,10 @@ sprout vm -scheduler-trace replay:trace.json examples/scheduler_replay.spr
 Replay skips wall-clock sleeps.
 It rejects different actions and unused trace steps.
 Read `docs/concurrency.md` for trace limits.
+
+Channel sends reject lists, maps, and structs.
+Use scalars, channels, or tasks for message values.
+Read `docs/concurrency.md` for the ownership rule.
 
 Bound a task wait with `await(task, milliseconds)`.
 Use zero to check readiness without waiting.

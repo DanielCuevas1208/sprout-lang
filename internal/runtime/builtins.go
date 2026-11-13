@@ -607,6 +607,9 @@ func builtinSend(ctx *Context, args []object.Object, pos source.Pos) (object.Obj
 	if !ok {
 		return nil, FmtErr("send() expects a channel, got %s", args[0].Type())
 	}
+	if err := ValidateChannelValue(args[1]); err != nil {
+		return nil, err
+	}
 	if err := ch.SendContext(ctx.Done, args[1]); err != nil {
 		return nil, err
 	}

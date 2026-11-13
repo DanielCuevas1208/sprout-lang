@@ -128,6 +128,8 @@ Programs can use it to build module values dynamically.
 
 `recv` returns `ok(value)` for a value.
 It returns `err("channel closed")` after close.
+`send` rejects lists, maps, and structs before delivery.
+Use scalars, channels, or tasks for channel messages.
 `await` returns the worker value or an error result.
 Pass timeout milliseconds as the second `await` argument.
 Zero checks task state without waiting.

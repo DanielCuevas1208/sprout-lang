@@ -459,3 +459,53 @@ spawn(fn() { return box.value })`,
 		}
 	}
 }
+
+func TestEnginesAgreeOnChannelValueOwnership(t *testing.T) {
+	accepted := `let messages = channel(2)
+send(messages, 7)
+send(messages, "ready")
+print(unwrap(recv(messages)))
+print(unwrap(recv(messages)))
+close(messages)`
+	interpOutput, interpErr := runInterpSrc(accepted)
+	vmOutput, vmErr := runVMSrc(accepted)
+	if interpErr != nil || vmErr != nil {
+		t.Fatalf("accepted message errors: interpreter=%v vm=%v", interpErr, vmErr)
+	}
+	if interpOutput != "7\nready\n" || vmOutput != interpOutput {
+		t.Fatalf("accepted message output = %q and %q, want identical scalar output", interpOutput, vmOutput)
+	}
+
+	rejected := []string{
+		`let messages = channel(1)
+let items = [1]
+send(messages, items)`,
+		`let messages = channel(1)
+let values = {"answer": 42}
+send(messages, values)`,
+		`let messages = channel(1)
+struct Box { value }
+let box = Box(42)
+send(messages, box)`,
+		`let messages = channel(1)
+let items = [1]
+send(messages, ok(items))`,
+	}
+	for _, src := range rejected {
+		interpOutput, interpErr = runInterpSrc(src)
+		vmOutput, vmErr = runVMSrc(src)
+		if interpErr == nil || vmErr == nil {
+			t.Errorf("expected both engines to reject mutable message for:\n%s\ninterpreter=%v vm=%v", src, interpErr, vmErr)
+			continue
+		}
+		if interpOutput != vmOutput {
+			t.Errorf("rejected message stdout differs for:\n%s\ninterp: %q\nvm: %q", src, interpOutput, vmOutput)
+		}
+		if interpErr.Error() != vmErr.Error() {
+			t.Errorf("rejected message errors differ for:\n%s\ninterp: %q\nvm: %q", src, interpErr.Error(), vmErr.Error())
+		}
+		if !strings.Contains(interpErr.Error(), "send() cannot send mutable") {
+			t.Errorf("rejected message error = %q, want channel ownership diagnostic", interpErr.Error())
+		}
+	}
+}

@@ -26,6 +26,18 @@ func ValidateTaskCapture(fn object.Object) error {
 	return nil
 }
 
+// ValidateChannelValue enforces channel message ownership.
+//
+// Channel sends use rejection semantics. Scalar values, channels, tasks, and
+// values that contain only those kinds may cross a channel. Mutable values
+// fail before the send can block or deliver a message.
+func ValidateChannelValue(value object.Object) error {
+	if kind := mutableCapture(value, make(map[visitKey]struct{})); kind != "" {
+		return fmt.Errorf("send() cannot send mutable %s; use scalars, allowed results, channels, or tasks instead", kind)
+	}
+	return nil
+}
+
 type visitKey struct {
 	typeOf reflect.Type
 	ptr    uintptr
